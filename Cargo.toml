@@ -1,0 +1,34 @@
+[package]
+name = "mochiOS"
+version = "0.0.1-dev"
+edition = "2021"
+authors = ["tas0dev"]
+default-run = "boot"
+
+[[bin]]
+name = "boot"
+path = "src/loader.rs"
+required-features = ["uefi-dep"]
+test = false
+bench = false
+
+[features]
+default = ["uefi-dep"]
+uefi-dep = ["dep:uefi"]
+kcfi = []
+cet-ibt = []
+cet-shadow-stack = []
+
+[dependencies]
+uefi = { version = "0.30", features = ["alloc", "logger", "global_allocator"], optional = true }
+spin = "0.9"
+x86_64 = "0.15"
+linked_list_allocator = "0.10.5"
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+mnu-abi = { path = "src/core/crates/abi" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
