@@ -424,6 +424,34 @@ unsafe fn load_initfs(bt: &BootServices, image_handle: Handle) -> (u64, usize) {
     (0, 0)
 }
 
+unsafe fn load_rootfs(bt: &BootServices, image_handle: Handle) -> (u64, usize) {
+    let rootfs_path = cstr16!(r"\system\rootfs.img");
+
+    let handles: alloc::vec::Vec<Handle> =
+        if let Ok(li) = bt.open_protocol_exclusive::<LoadedImage>(image_handle) {
+            if let Some(dev) = li.device() {
+                drop(li);
+                alloc::vec![dev]
+            } else {
+                bt.find_handles::<SimpleFileSystem>().unwrap_or_default()
+            }
+        } else {
+            bt.find_handles::<SimpleFileSystem>().unwrap_or_default()
+        };
+
+    for handle in handles {
+        tick_booting_gif();
+        if let Some((addr, size)) = try_load_raw(bt, image_handle, handle, rootfs_path, "rootfs")
+        {
+            println!("rootfs loaded at {:#x} ({} bytes)", addr, size);
+            return (addr, size);
+        }
+    }
+
+    println!("[WARN] rootfs.img not found, rootfs will be empty");
+    (0, 0)
+}
+
 /// 指定ハンドルから任意ファイルをページ単位でロードし (物理アドレス, サイズ) を返す
 unsafe fn try_load_raw(
     bt: &BootServices,
@@ -933,9 +961,10 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         unsafe { load_initfs(bt, image_handle) }
     };
 
-    // rootfsは起動後にFS層がマウントして利用するため、
-    // ブートローダーではプリロードしない
-    let (rootfs_addr, rootfs_size) = (0u64, 0usize);
+    let (rootfs_addr, rootfs_size) = {
+        let bt = system_table.boot_services();
+        unsafe { load_rootfs(bt, image_handle) }
+    };
 
     {
         let bt = system_table.boot_services();
