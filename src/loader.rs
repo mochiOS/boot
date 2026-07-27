@@ -13,6 +13,7 @@ use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::file::{File, FileAttribute, FileInfo, FileMode, FileType, RegularFile};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::pi::mp::MpServices;
+use uefi::proto::rng::Rng;
 use uefi::table::boot::{
     AllocateType, MemoryType as UefiMemType, OpenProtocolAttributes, OpenProtocolParams,
 };
@@ -67,6 +68,8 @@ static mut BOOT_INFO: BootInfo = BootInfo {
     smp_handoff_size: 0,
     smp_trampoline_addr: 0,
     smp_trampoline_size: 0,
+    entropy_seed: [0; 32],
+    entropy_seed_valid: 0,
 };
 
 static mut SMP_HANDOFF: SmpHandoff = SmpHandoff::new();
@@ -76,6 +79,17 @@ static mut MEMORY_MAP: [MemoryRegion; 256] = [MemoryRegion {
     len: 0,
     region_type: MemoryType::Reserved,
 }; 256];
+
+fn firmware_entropy(bt: &BootServices) -> Option<[u8; 32]> {
+    let handle = bt.get_handle_for_protocol::<Rng>().ok()?;
+    let mut protocol = bt.open_protocol_exclusive::<Rng>(handle).ok()?;
+    let mut seed = [0u8; 32];
+    protocol.get_rng(None, &mut seed).ok()?;
+    if seed.iter().all(|byte| *byte == 0) {
+        return None;
+    }
+    Some(seed)
+}
 
 /// ELF64 ファイルヘッダ
 #[repr(C)]
@@ -936,6 +950,13 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     let rootfs_addr = 0u64;
     let rootfs_size = 0usize;
 
+    let entropy_seed = firmware_entropy(system_table.boot_services());
+    if entropy_seed.is_some() {
+        println!("UEFI RNG seed acquired");
+    } else {
+        println!("[WARN] UEFI RNG protocol unavailable");
+    }
+
     {
         let bt = system_table.boot_services();
         unsafe {
@@ -1008,6 +1029,10 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         BOOT_INFO.rootfs_size = rootfs_size;
         BOOT_INFO.smp_handoff_addr = addr_of_mut!(SMP_HANDOFF) as u64;
         BOOT_INFO.smp_handoff_size = core::mem::size_of::<SmpHandoff>();
+        if let Some(seed) = entropy_seed {
+            BOOT_INFO.entropy_seed = seed;
+            BOOT_INFO.entropy_seed_valid = 1;
+        }
     }
 
     // カーネルへジャンプ (system V AMD64 ABI)
