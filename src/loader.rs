@@ -6,7 +6,11 @@ extern crate alloc;
 mod console;
 
 use core::ptr::addr_of_mut;
-use mochios::{BootInfo, MemoryRegion, MemoryType, SmpHandoff, MAX_CPU_IDS};
+use mochios::{
+    BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_ENTROPY,
+    BOOT_FEATURE_FRAMEBUFFER, BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP,
+    MAX_CPU_IDS,
+};
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
 use uefi::proto::loaded_image::LoadedImage;
@@ -34,43 +38,13 @@ macro_rules! vga_print {
 }
 
 macro_rules! println {
-    () => {{
-        vga_print!("\n");
-        sprint!("\n");
-    }};
     ($($arg:tt)*) => {{
         vga_print!("[mBoot] {}\n", format_args!($($arg)*));
         sprint!("[mBoot] {}\n", format_args!($($arg)*));
     }};
 }
 
-static mut BOOT_INFO: BootInfo = BootInfo {
-    physical_memory_offset: 0,
-    framebuffer_addr: 0,
-    framebuffer_size: 0,
-    screen_width: 0,
-    screen_height: 0,
-    stride: 0,
-    memory_map_addr: 0,
-    memory_map_len: 0,
-    memory_map_entry_size: 0,
-    kernel_heap_addr: 0,
-    initfs_addr: 0,
-    initfs_size: 0,
-    rootfs_addr: 0,
-    rootfs_size: 0,
-    cpu_total: 1,
-    cpu_enabled: 1,
-    bsp_apic_id: 0,
-    cpu_apic_ids: [0; MAX_CPU_IDS],
-    cpu_apic_id_count: 0,
-    smp_handoff_addr: 0,
-    smp_handoff_size: 0,
-    smp_trampoline_addr: 0,
-    smp_trampoline_size: 0,
-    entropy_seed: [0; 32],
-    entropy_seed_valid: 0,
-};
+static mut BOOT_INFO: BootInfo = BootInfo::empty();
 
 static mut SMP_HANDOFF: SmpHandoff = SmpHandoff::new();
 
@@ -380,8 +354,8 @@ unsafe fn populate_cpu_info(bt: &BootServices) {
         }
     };
 
-    BOOT_INFO.cpu_total = counts.total;
-    BOOT_INFO.cpu_enabled = counts.enabled;
+    BOOT_INFO.cpu_total = counts.total as u32;
+    BOOT_INFO.cpu_enabled = counts.enabled as u32;
     BOOT_INFO.cpu_apic_id_count = 0;
     let cpu_total = BOOT_INFO.cpu_total;
     let cpu_enabled = BOOT_INFO.cpu_enabled;
@@ -968,7 +942,7 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
                 0
             };
             BOOT_INFO.smp_trampoline_addr = trampoline_addr;
-            BOOT_INFO.smp_trampoline_size = trampoline_size;
+            BOOT_INFO.smp_trampoline_size = trampoline_size as u64;
             if trampoline_addr != 0 {
                 println!(
                     "AP trampoline reserved at {:#x} ({} bytes)",
@@ -1014,24 +988,35 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     unsafe {
         BOOT_INFO.physical_memory_offset = 0;
         BOOT_INFO.framebuffer_addr = fb_addr;
-        BOOT_INFO.framebuffer_size = fb_size;
-        BOOT_INFO.screen_width = screen_w;
-        BOOT_INFO.screen_height = screen_h;
-        BOOT_INFO.stride = stride;
+        BOOT_INFO.framebuffer_size = fb_size as u64;
+        BOOT_INFO.screen_width = screen_w as u64;
+        BOOT_INFO.screen_height = screen_h as u64;
+        BOOT_INFO.stride = stride as u64;
         BOOT_INFO.memory_map_addr = MEMORY_MAP.as_ptr() as u64;
-        BOOT_INFO.memory_map_len = map_count;
-        BOOT_INFO.memory_map_entry_size = size_of::<MemoryRegion>();
+        BOOT_INFO.memory_map_len = map_count as u64;
+        BOOT_INFO.memory_map_entry_size = size_of::<MemoryRegion>() as u32;
         // kernel_heap_addr はカーネル自身が entry.rs 内で設定する
         BOOT_INFO.kernel_heap_addr = 0;
         BOOT_INFO.initfs_addr = initfs_addr;
-        BOOT_INFO.initfs_size = initfs_size;
+        BOOT_INFO.initfs_size = initfs_size as u64;
         BOOT_INFO.rootfs_addr = rootfs_addr;
-        BOOT_INFO.rootfs_size = rootfs_size;
+        BOOT_INFO.rootfs_size = rootfs_size as u64;
         BOOT_INFO.smp_handoff_addr = addr_of_mut!(SMP_HANDOFF) as u64;
-        BOOT_INFO.smp_handoff_size = core::mem::size_of::<SmpHandoff>();
+        BOOT_INFO.smp_handoff_size = core::mem::size_of::<SmpHandoff>() as u32;
+        BOOT_INFO.feature_flags = BOOT_FEATURE_SMP;
+        if fb_addr != 0 && fb_size != 0 {
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_FRAMEBUFFER;
+        }
+        if initfs_addr != 0 && initfs_size != 0 {
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_INITFS;
+        }
+        if rootfs_addr != 0 && rootfs_size != 0 {
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_ROOTFS_IMAGE;
+        }
         if let Some(seed) = entropy_seed {
             BOOT_INFO.entropy_seed = seed;
             BOOT_INFO.entropy_seed_valid = 1;
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_ENTROPY;
         }
     }
 
