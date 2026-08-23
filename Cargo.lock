@@ -105,21 +105,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
-name = "mnu"
-version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9ae543c841b48a0317f03e1e5814d1b073b4f964"
-dependencies = [
- "linked_list_allocator",
- "mnu-abi",
- "mochios-csprng",
- "mochios-time-core",
- "plugkit-sys",
- "sha2",
- "spin",
- "x86_64",
-]
-
-[[package]]
 name = "mnu-abi"
 version = "0.1.0"
 source = "git+https://github.com/mochiOS/mnu#9ae543c841b48a0317f03e1e5814d1b073b4f964"
@@ -129,44 +114,11 @@ name = "mochiOS"
 version = "0.0.1-dev"
 dependencies = [
  "linked_list_allocator",
- "mnu",
  "mnu-abi",
  "sha2",
  "spin",
  "uefi",
  "x86_64",
-]
-
-[[package]]
-name = "mochios-csprng"
-version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9ae543c841b48a0317f03e1e5814d1b073b4f964"
-dependencies = [
- "rand_chacha",
- "rand_core",
- "zeroize",
-]
-
-[[package]]
-name = "mochios-time-core"
-version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9ae543c841b48a0317f03e1e5814d1b073b4f964"
-
-[[package]]
-name = "plugkit-sys"
-version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9ae543c841b48a0317f03e1e5814d1b073b4f964"
-dependencies = [
- "spin",
-]
-
-[[package]]
-name = "ppv-lite86"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
-dependencies = [
- "zerocopy",
 ]
 
 [[package]]
@@ -206,22 +158,6 @@ checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
-
-[[package]]
-name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
- "rand_core",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
 name = "rustversion"
@@ -375,29 +311,3 @@ dependencies = [
  "rustversion",
  "volatile",
 ]
-
-[[package]]
-name = "zerocopy"
-version = "0.8.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5a105cd7b140f6eeec8acff2ea38135d3cab283ada58540f629fe51e46696eb"
-dependencies = [
- "zerocopy-derive",
-]
-
-[[package]]
-name = "zerocopy-derive"
-version = "0.8.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fe976fb70c78cd64cccfe3a6fc142244e8a77b70959b30faf9d0ac37ee228eb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "zeroize"
-version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"

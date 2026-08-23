@@ -4,12 +4,12 @@
 extern crate alloc;
 
 mod console;
+mod panic;
 
 use core::ptr::addr_of_mut;
-use mochios::{
-    BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_ENTROPY,
-    BOOT_FEATURE_FRAMEBUFFER, BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP,
-    MAX_CPU_IDS,
+use mnu_abi::boot::{
+    BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_FRAMEBUFFER,
+    BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP, MAX_CPU_IDS,
 };
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
