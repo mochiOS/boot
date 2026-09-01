@@ -229,6 +229,7 @@ unsafe fn find_elf_symbol_in_file(
             if symtab_entsize < 24 || symtab_size == 0 {
                 continue;
             }
+            let symtab_offset = usize::try_from(sh.sh_offset).ok()?;
             let sh_link = sh.sh_link as usize;
             if sh_link >= shnum {
                 continue;
@@ -248,7 +249,6 @@ unsafe fn find_elf_symbol_in_file(
             let str_sh = &*(sh_buf.as_ptr() as *const Elf64Shdr);
             let strtab_size = usize::try_from(str_sh.sh_size).ok()?;
             let strtab_offset = usize::try_from(str_sh.sh_offset).ok()?;
-            let symtab_offset = usize::try_from(sh.sh_offset).ok()?;
 
             let mut symtab = alloc::vec![0u8; symtab_size];
             let mut strtab = alloc::vec![0u8; strtab_size];
