@@ -9,7 +9,8 @@ mod panic;
 use core::ptr::addr_of_mut;
 use mnu_abi::boot::{
     BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_FRAMEBUFFER,
-    BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP, MAX_CPU_IDS,
+    BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP, MAX_BOOT_MEMORY_REGIONS,
+    MAX_CPU_IDS,
 };
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
@@ -48,11 +49,11 @@ static mut BOOT_INFO: BootInfo = BootInfo::empty();
 
 static mut SMP_HANDOFF: SmpHandoff = SmpHandoff::new();
 
-static mut MEMORY_MAP: [MemoryRegion; 256] = [MemoryRegion {
+static mut MEMORY_MAP: [MemoryRegion; MAX_BOOT_MEMORY_REGIONS] = [MemoryRegion {
     start: 0,
     len: 0,
     region_type: MemoryType::Reserved,
-}; 256];
+}; MAX_BOOT_MEMORY_REGIONS];
 
 fn firmware_entropy(bt: &BootServices) -> Option<[u8; 32]> {
     let handle = bt.get_handle_for_protocol::<Rng>().ok()?;
@@ -962,7 +963,7 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     unsafe {
         let mut count = 0usize;
         for (i, desc) in memory_map_iter.entries().enumerate() {
-            if i >= 256 {
+            if i >= MAX_BOOT_MEMORY_REGIONS {
                 break;
             }
             MEMORY_MAP[i] = MemoryRegion {
