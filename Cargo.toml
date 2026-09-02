@@ -5,6 +5,9 @@ edition = "2021"
 authors = ["tas0dev"]
 default-run = "boot"
 
+[workspace]
+members = [".", "crates/mdriver-protocol"]
+
 [[bin]]
 name = "boot"
 path = "src/loader.rs"
@@ -26,11 +29,47 @@ required-features = ["mdriver-probe"]
 test = false
 bench = false
 
+[[bin]]
+name = "domain-bootstrap"
+path = "src/domain_entry.rs"
+required-features = ["domain-probes"]
+test = false
+bench = false
+
+[[bin]]
+name = "hardware-bootstrap"
+path = "src/hardware_bootstrap.rs"
+required-features = ["domain-probes"]
+test = false
+bench = false
+
+[[bin]]
+name = "event-bootstrap"
+path = "src/event_bootstrap.rs"
+required-features = ["domain-probes"]
+test = false
+bench = false
+
+[[bin]]
+name = "grant-bootstrap"
+path = "src/grant_bootstrap.rs"
+required-features = ["domain-probes"]
+test = false
+bench = false
+
+[[bin]]
+name = "ring-bootstrap"
+path = "src/ring_bootstrap.rs"
+required-features = ["domain-probes"]
+test = false
+bench = false
+
 [features]
 default = ["uefi-dep"]
 uefi-dep = ["dep:uefi"]
 system-domain = ["dep:mnu"]
 mdriver-probe = []
+domain-probes = []
 kcfi = []
 cet-ibt = []
 cet-shadow-stack = []
@@ -43,6 +82,7 @@ linked_list_allocator = "0.10.5"
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 mnu-abi = { git = "https://github.com/mochiOS/mnu", package = "mnu-abi" }
 mnu = { git = "https://github.com/mochiOS/mnu", default-features = false, optional = true }
+mochios-mdriver-protocol = { path = "crates/mdriver-protocol" }
 
 [profile.dev]
 panic = "abort"

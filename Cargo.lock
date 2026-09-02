@@ -130,6 +130,7 @@ dependencies = [
  "linked_list_allocator",
  "mnu",
  "mnu-abi",
+ "mochios-mdriver-protocol",
  "sha2",
  "spin",
  "uefi",
@@ -145,6 +146,10 @@ dependencies = [
  "rand_core",
  "zeroize",
 ]
+
+[[package]]
+name = "mochios-mdriver-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "mochios-time-core"
