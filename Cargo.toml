@@ -19,10 +19,18 @@ required-features = ["system-domain"]
 test = false
 bench = false
 
+[[bin]]
+name = "mdriver-probe"
+path = "src/domain_probe.rs"
+required-features = ["mdriver-probe"]
+test = false
+bench = false
+
 [features]
 default = ["uefi-dep"]
 uefi-dep = ["dep:uefi"]
 system-domain = ["dep:mnu"]
+mdriver-probe = []
 kcfi = []
 cet-ibt = []
 cet-shadow-stack = []
