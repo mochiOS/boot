@@ -107,12 +107,12 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 [[package]]
 name = "mnu"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9f098f219b927786f81c7b60a31f82854d7f54ec"
 dependencies = [
  "linked_list_allocator",
  "mnu-abi",
- "mochios-csprng",
- "mochios-time-core",
+ "mnu-csprng",
+ "mnu-metrics",
+ "mnu-time-core",
  "sha2",
  "spin",
  "x86_64",
@@ -121,7 +121,23 @@ dependencies = [
 [[package]]
 name = "mnu-abi"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9f098f219b927786f81c7b60a31f82854d7f54ec"
+
+[[package]]
+name = "mnu-csprng"
+version = "0.1.0"
+dependencies = [
+ "rand_chacha",
+ "rand_core",
+ "zeroize",
+]
+
+[[package]]
+name = "mnu-metrics"
+version = "0.1.0"
+
+[[package]]
+name = "mnu-time-core"
+version = "0.1.0"
 
 [[package]]
 name = "mochiOS"
@@ -138,23 +154,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "mochios-csprng"
-version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9f098f219b927786f81c7b60a31f82854d7f54ec"
-dependencies = [
- "rand_chacha",
- "rand_core",
- "zeroize",
-]
-
-[[package]]
 name = "mochios-mdriver-protocol"
 version = "0.1.0"
-
-[[package]]
-name = "mochios-time-core"
-version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#9f098f219b927786f81c7b60a31f82854d7f54ec"
 
 [[package]]
 name = "ppv-lite86"

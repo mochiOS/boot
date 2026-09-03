@@ -23,6 +23,7 @@ pub const MDRIVER_CONTROL_PRESENT_DISPLAY: u16 = 20;
 pub const MDRIVER_CONTROL_CLOSE_DISPLAY: u16 = 21;
 pub const MDRIVER_CONTROL_INSTALL_PARTITION: u16 = 22;
 pub const MDRIVER_CONTROL_OPEN_PARTITION: u16 = 23;
+pub const MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER: u16 = 24;
 
 pub const MDRIVER_CONTROL_STATUS_OK: u32 = 0;
 pub const MDRIVER_CONTROL_STATUS_UNSUPPORTED_VERSION: u32 = 1;
@@ -75,9 +76,14 @@ pub const MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH: u64 = 1 << 10;
 pub const MDRIVER_DEVICE_FEATURE_BLOCK_ASYNC_QUEUE: u64 = 1 << 11;
 /// A display accepts tightly packed 32-bit pixel tiles from one Grant page.
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_TILE: u64 = 1 << 12;
+/// A display accepts a tile spanning the registered display Grant pages.
+pub const MDRIVER_DEVICE_FEATURE_DISPLAY_BULK: u64 = 1 << 13;
 
 pub const MDRIVER_DISPLAY_BUFFER_PAGE: u64 = 7;
 pub const MDRIVER_DISPLAY_MAX_TRANSFER: u64 = 4096;
+pub const MDRIVER_DISPLAY_BULK_FIRST_PAGE: u64 = 9;
+pub const MDRIVER_DISPLAY_BULK_PAGE_COUNT: usize = 55;
+pub const MDRIVER_DISPLAY_BULK_MAX_TRANSFER: u64 = MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64 * 4096;
 pub const MDRIVER_DISPLAY_PIXEL_BYTES: u64 = 4;
 
 pub const MDRIVER_BLOCK_SECTOR_SIZE: u64 = 512;
@@ -230,5 +236,15 @@ mod tests {
             MdriverControlResponse::decode(&response.encode()),
             Some(response)
         );
+    }
+
+    #[test]
+    fn bulk_display_buffer_fits_the_domain_grant_window() {
+        assert_eq!(MDRIVER_DISPLAY_BULK_MAX_TRANSFER, 55 * 4096);
+        assert_eq!(
+            MDRIVER_DISPLAY_BULK_FIRST_PAGE + MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64,
+            64
+        );
+        assert!(MDRIVER_DISPLAY_BUFFER_PAGE < MDRIVER_DISPLAY_BULK_FIRST_PAGE);
     }
 }

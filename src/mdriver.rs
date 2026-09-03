@@ -16,12 +16,14 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_CONTROL_DISPLAY_INFO, MDRIVER_CONTROL_ENUMERATE, MDRIVER_CONTROL_INSPECT_STORAGE,
     MDRIVER_CONTROL_INSTALL_PARTITION, MDRIVER_CONTROL_NEGOTIATE, MDRIVER_CONTROL_OPEN_DEVICE,
     MDRIVER_CONTROL_OPEN_DISPLAY, MDRIVER_CONTROL_OPEN_PARTITION, MDRIVER_CONTROL_PING,
-    MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_START_SESSION, MDRIVER_CONTROL_STATUS_END,
-    MDRIVER_CONTROL_STATUS_OK, MDRIVER_CONTROL_VERSION, MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH,
-    MDRIVER_DEVICE_FEATURE_BLOCK_READ, MDRIVER_DEVICE_FEATURE_BLOCK_WRITE,
+    MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER,
+    MDRIVER_CONTROL_START_SESSION, MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK,
+    MDRIVER_CONTROL_VERSION, MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH, MDRIVER_DEVICE_FEATURE_BLOCK_READ,
+    MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
     MDRIVER_DEVICE_FEATURE_DISPLAY_TILE, MDRIVER_DEVICE_FEATURE_READ_ONLY,
     MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY, MDRIVER_DISPLAY_BUFFER_PAGE,
-    MDRIVER_DISPLAY_MAX_TRANSFER, MDRIVER_DISPLAY_PIXEL_BYTES,
+    MDRIVER_DISPLAY_BULK_FIRST_PAGE, MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
+    MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_MAX_TRANSFER, MDRIVER_DISPLAY_PIXEL_BYTES,
     MDRIVER_STORAGE_QUERY_PARTITION_GUIDS,
 };
 use mochios_mdriver_protocol::{
@@ -95,6 +97,7 @@ struct DisplayState {
     device_id: u32,
     info: DisplayInfo,
     data_address: u64,
+    max_transfer: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -102,6 +105,7 @@ struct DisplayCandidate {
     device_id: u32,
     features: u64,
     grant_reference: Option<u32>,
+    bulk_grant_count: usize,
 }
 
 const MAX_BLOCK_CANDIDATES: usize = 16;
@@ -130,9 +134,9 @@ pub fn initialize_client() -> Result<Summary, Error> {
     }
     let (grant_start, grant_size) =
         hypervisor_guest::grant_window().ok_or(Error::MissingGrantWindow)?;
-    if grant_size
-        < (core::cmp::max(MDRIVER_INSTALL_METADATA_PAGE, MDRIVER_DISPLAY_BUFFER_PAGE) + 1) * 4096
-    {
+    let required_grant_pages =
+        core::cmp::max(MDRIVER_INSTALL_METADATA_PAGE, MDRIVER_DISPLAY_BUFFER_PAGE) + 1;
+    if grant_size < required_grant_pages * 4096 {
         return Err(Error::MissingGrantWindow);
     }
 
@@ -264,6 +268,7 @@ pub fn initialize_client() -> Result<Summary, Error> {
             device_id,
             features,
             grant_reference: None,
+            bulk_grant_count: 0,
         });
     }
 
@@ -725,36 +730,84 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
     if candidate.features & MDRIVER_DEVICE_FEATURE_DISPLAY_TILE == 0 {
         return Err(Error::Device);
     }
-    let grant_reference = match candidate.grant_reference {
-        Some(reference) => reference,
-        None => {
-            let Some(grant_start) = hypervisor_guest::grant_window().map(|window| window.0) else {
-                return Err(Error::MissingGrantWindow);
-            };
+    let (grant_start, grant_size) =
+        hypervisor_guest::grant_window().ok_or(Error::MissingGrantWindow)?;
+    let bulk_pages_end =
+        MDRIVER_DISPLAY_BULK_FIRST_PAGE + MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64;
+    let bulk = candidate.features & MDRIVER_DEVICE_FEATURE_DISPLAY_BULK != 0
+        && grant_size >= bulk_pages_end * 4096;
+    let (data_address, max_transfer, open_arguments) = if bulk {
+        while candidate.bulk_grant_count < MDRIVER_DISPLAY_BULK_PAGE_COUNT {
+            let index = candidate.bulk_grant_count;
             let reference = hypervisor_guest::invoke(
                 HypercallNumber::GrantCreate,
-                grant_start + MDRIVER_DISPLAY_BUFFER_PAGE * 4096,
+                grant_start + (MDRIVER_DISPLAY_BULK_FIRST_PAGE + index as u64) * 4096,
                 u64::from(MDRIVER_DOMAIN_ID),
                 GRANT_FLAG_WRITABLE,
             );
             if reference == GRANT_REF_INVALID || reference > u64::from(u32::MAX) {
                 return Err(Error::Hypercall);
             }
-            candidate.grant_reference = Some(reference as u32);
+            let registered = transact(
+                client,
+                MdriverControlRequest::new(
+                    MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER,
+                    candidate.device_id,
+                    [index as u64, reference, 0, 0],
+                ),
+            )?;
+            if registered.status != MDRIVER_CONTROL_STATUS_OK
+                || registered.values[0] != index as u64
+            {
+                return Err(Error::Device);
+            }
+            candidate.bulk_grant_count += 1;
             client.display_candidate = Some(candidate);
-            reference as u32
         }
+        (
+            grant_start + MDRIVER_DISPLAY_BULK_FIRST_PAGE * 4096,
+            MDRIVER_DISPLAY_BULK_MAX_TRANSFER as usize,
+            [
+                0,
+                MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64,
+                MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
+                0,
+            ],
+        )
+    } else {
+        let grant_reference = match candidate.grant_reference {
+            Some(reference) => reference,
+            None => {
+                let reference = hypervisor_guest::invoke(
+                    HypercallNumber::GrantCreate,
+                    grant_start + MDRIVER_DISPLAY_BUFFER_PAGE * 4096,
+                    u64::from(MDRIVER_DOMAIN_ID),
+                    GRANT_FLAG_WRITABLE,
+                );
+                if reference == GRANT_REF_INVALID || reference > u64::from(u32::MAX) {
+                    return Err(Error::Hypercall);
+                }
+                candidate.grant_reference = Some(reference as u32);
+                client.display_candidate = Some(candidate);
+                reference as u32
+            }
+        };
+        (
+            grant_start + MDRIVER_DISPLAY_BUFFER_PAGE * 4096,
+            MDRIVER_DISPLAY_MAX_TRANSFER as usize,
+            [u64::from(grant_reference), 0, 0, 0],
+        )
     };
     let opened = transact(
         client,
         MdriverControlRequest::new(
             MDRIVER_CONTROL_OPEN_DISPLAY,
             candidate.device_id,
-            [u64::from(grant_reference), 0, 0, 0],
+            open_arguments,
         ),
     )?;
     if opened.status != MDRIVER_CONTROL_STATUS_OK
-        || opened.values[0] != MDRIVER_DISPLAY_MAX_TRANSFER
+        || opened.values[0] != max_transfer as u64
         || opened.values[1] != MDRIVER_DISPLAY_PIXEL_BYTES
     {
         return Err(Error::Device);
@@ -789,10 +842,8 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
             green_offset: (format >> 16) as u8,
             blue_offset: (format >> 24) as u8,
         },
-        data_address: hypervisor_guest::grant_window()
-            .ok_or(Error::MissingGrantWindow)?
-            .0
-            + MDRIVER_DISPLAY_BUFFER_PAGE * 4096,
+        data_address,
+        max_transfer,
     };
     client.display = Some(display);
     Ok(display)
@@ -820,12 +871,15 @@ pub fn present_display(
         })
         .and_then(|pixels| pixels.checked_mul(MDRIVER_DISPLAY_PIXEL_BYTES as usize))
         .ok_or(Error::Protocol)?;
-    if width == 0 || height == 0 || expected != pixels.len() || expected > 4096 {
+    if width == 0 || height == 0 || expected != pixels.len() {
         return Err(Error::Protocol);
     }
     let mut guard = CLIENT.lock();
     let client = guard.as_mut().ok_or(Error::Device)?;
     let display = ensure_display(client)?;
+    if expected > display.max_transfer {
+        return Err(Error::Protocol);
+    }
     if x.checked_add(width)
         .is_none_or(|right| right > display.info.width)
         || y.checked_add(height)
@@ -941,6 +995,16 @@ fn platform_present_display(
     present_display(x, y, width, height, pixels).map_err(platform_error)
 }
 
+fn platform_display_transfer_limit() -> Result<usize, mnu::platform::PlatformError> {
+    let mut guard = CLIENT.lock();
+    let client = guard
+        .as_mut()
+        .ok_or(mnu::platform::PlatformError::Unavailable)?;
+    ensure_display(client)
+        .map(|display| display.max_transfer)
+        .map_err(platform_error)
+}
+
 fn platform_device_control(
     operation: u16,
     device_id: u32,
@@ -957,6 +1021,7 @@ fn platform_device_control(
 
 pub static PLATFORM_OPS: mnu::platform::PlatformOps = mnu::platform::PlatformOps {
     display_info: platform_display_info,
+    display_transfer_limit: platform_display_transfer_limit,
     present_display: platform_present_display,
     device_control: platform_device_control,
 };
