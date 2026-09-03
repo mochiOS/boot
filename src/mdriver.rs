@@ -3,7 +3,7 @@ use core::ptr::copy_nonoverlapping;
 use mnu_abi::hypervisor::{
     HypercallNumber, DOMAIN_FEATURE_EVENT_CHANNEL, DOMAIN_FEATURE_EVENT_POLL,
     DOMAIN_FEATURE_GRANT_TABLE, DOMAIN_FEATURE_SHARED_RING, EVENT_CHANNEL_NO_EVENT,
-    GRANT_FLAG_WRITABLE, GRANT_REF_INVALID, HYPERCALL_SUCCESS,
+    GRANT_FLAG_WRITABLE, GRANT_RANGE_PAGE_COUNT_SHIFT, GRANT_REF_INVALID, HYPERCALL_SUCCESS,
 };
 use mnu_abi::shared_ring::{
     initialize, pop_response, push_request, SharedRingError, SharedRingMessage, SharedRingPage,
@@ -20,10 +20,13 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_CONTROL_START_SESSION, MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK,
     MDRIVER_CONTROL_VERSION, MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH, MDRIVER_DEVICE_FEATURE_BLOCK_READ,
     MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
-    MDRIVER_DEVICE_FEATURE_DISPLAY_TILE, MDRIVER_DEVICE_FEATURE_READ_ONLY,
+    MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE, MDRIVER_DEVICE_FEATURE_DISPLAY_TILE,
+    MDRIVER_DEVICE_FEATURE_READ_ONLY,
     MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY, MDRIVER_DISPLAY_BUFFER_PAGE,
     MDRIVER_DISPLAY_BULK_FIRST_PAGE, MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
-    MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_MAX_TRANSFER, MDRIVER_DISPLAY_PIXEL_BYTES,
+    MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_MAX_TRANSFER,
+    MDRIVER_DISPLAY_OPEN_SHARED_SURFACE, MDRIVER_DISPLAY_PIXEL_BYTES,
+    MDRIVER_DISPLAY_SURFACE_FIRST_PAGE, MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT,
     MDRIVER_STORAGE_QUERY_PARTITION_GUIDS,
 };
 use mochios_mdriver_protocol::{
@@ -90,6 +93,9 @@ pub struct DisplayInfo {
     pub red_offset: u8,
     pub green_offset: u8,
     pub blue_offset: u8,
+    pub surface_address: u64,
+    pub surface_size: u64,
+    pub shared_surface: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -98,6 +104,7 @@ struct DisplayState {
     info: DisplayInfo,
     data_address: u64,
     max_transfer: usize,
+    shared_surface: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -106,6 +113,7 @@ struct DisplayCandidate {
     features: u64,
     grant_reference: Option<u32>,
     bulk_grant_count: usize,
+    surface_grant_reference: Option<u32>,
 }
 
 const MAX_BLOCK_CANDIDATES: usize = 16;
@@ -269,6 +277,7 @@ pub fn initialize_client() -> Result<Summary, Error> {
             features,
             grant_reference: None,
             bulk_grant_count: 0,
+            surface_grant_reference: None,
         });
     }
 
@@ -734,9 +743,47 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
         hypervisor_guest::grant_window().ok_or(Error::MissingGrantWindow)?;
     let bulk_pages_end =
         MDRIVER_DISPLAY_BULK_FIRST_PAGE + MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64;
+    let surface_page_count = grant_size
+        .checked_div(4096)
+        .and_then(|pages| pages.checked_sub(MDRIVER_DISPLAY_SURFACE_FIRST_PAGE))
+        .and_then(|pages| u32::try_from(pages).ok())
+        .unwrap_or(0);
+    let shared_surface = candidate.features & MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE != 0
+        && u64::from(surface_page_count) >= MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT;
     let bulk = candidate.features & MDRIVER_DEVICE_FEATURE_DISPLAY_BULK != 0
         && grant_size >= bulk_pages_end * 4096;
-    let (data_address, max_transfer, open_arguments) = if bulk {
+    let (data_address, max_transfer, open_arguments, shared_surface) = if shared_surface {
+        let grant_reference = match candidate.surface_grant_reference {
+            Some(reference) => reference,
+            None => {
+                let packed = u64::from(surface_page_count) << GRANT_RANGE_PAGE_COUNT_SHIFT;
+                let reference = hypervisor_guest::invoke(
+                    HypercallNumber::GrantCreateRange,
+                    grant_start + MDRIVER_DISPLAY_SURFACE_FIRST_PAGE * 4096,
+                    u64::from(MDRIVER_DOMAIN_ID),
+                    packed,
+                );
+                if reference == GRANT_REF_INVALID || reference > u64::from(u32::MAX) {
+                    return Err(Error::Hypercall);
+                }
+                candidate.surface_grant_reference = Some(reference as u32);
+                client.display_candidate = Some(candidate);
+                reference as u32
+            }
+        };
+        let surface_size = u64::from(surface_page_count) * 4096;
+        (
+            grant_start + MDRIVER_DISPLAY_SURFACE_FIRST_PAGE * 4096,
+            surface_size as usize,
+            [
+                u64::from(grant_reference),
+                u64::from(surface_page_count),
+                surface_size,
+                MDRIVER_DISPLAY_OPEN_SHARED_SURFACE,
+            ],
+            true,
+        )
+    } else if bulk {
         while candidate.bulk_grant_count < MDRIVER_DISPLAY_BULK_PAGE_COUNT {
             let index = candidate.bulk_grant_count;
             let reference = hypervisor_guest::invoke(
@@ -773,6 +820,7 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
                 MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
                 0,
             ],
+            false,
         )
     } else {
         let grant_reference = match candidate.grant_reference {
@@ -796,6 +844,7 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
             grant_start + MDRIVER_DISPLAY_BUFFER_PAGE * 4096,
             MDRIVER_DISPLAY_MAX_TRANSFER as usize,
             [u64::from(grant_reference), 0, 0, 0],
+            false,
         )
     };
     let opened = transact(
@@ -820,6 +869,7 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
     let width = u32::try_from(response.values[0]).map_err(|_| Error::Protocol)?;
     let height = u32::try_from(response.values[1]).map_err(|_| Error::Protocol)?;
     let line_bytes = u32::try_from(response.values[2]).map_err(|_| Error::Protocol)?;
+    let surface_bytes = u64::from(line_bytes).saturating_mul(u64::from(height));
     if response.status != MDRIVER_CONTROL_STATUS_OK
         || width == 0
         || height == 0
@@ -829,6 +879,7 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
         || (format >> 8) as u8 != 16
         || (format >> 16) as u8 != 8
         || (format >> 24) as u8 != 0
+        || shared_surface && surface_bytes > max_transfer as u64
     {
         return Err(Error::Protocol);
     }
@@ -841,9 +892,17 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
             red_offset: (format >> 8) as u8,
             green_offset: (format >> 16) as u8,
             blue_offset: (format >> 24) as u8,
+            surface_address: if shared_surface { data_address } else { 0 },
+            surface_size: if shared_surface {
+                surface_bytes
+            } else {
+                0
+            },
+            shared_surface,
         },
         data_address,
         max_transfer,
+        shared_surface,
     };
     client.display = Some(display);
     Ok(display)
@@ -877,7 +936,7 @@ pub fn present_display(
     let mut guard = CLIENT.lock();
     let client = guard.as_mut().ok_or(Error::Device)?;
     let display = ensure_display(client)?;
-    if expected > display.max_transfer {
+    if display.shared_surface || expected > display.max_transfer {
         return Err(Error::Protocol);
     }
     if x.checked_add(width)
@@ -894,6 +953,35 @@ pub fn present_display(
             pixels.len(),
         )
     };
+    submit_display_damage(client, display, x, y, width, height)
+}
+
+pub fn commit_display(x: u32, y: u32, width: u32, height: u32) -> Result<(), Error> {
+    if width == 0 || height == 0 {
+        return Err(Error::Protocol);
+    }
+    let mut guard = CLIENT.lock();
+    let client = guard.as_mut().ok_or(Error::Device)?;
+    let display = ensure_display(client)?;
+    if !display.shared_surface
+        || x.checked_add(width)
+            .is_none_or(|right| right > display.info.width)
+        || y.checked_add(height)
+            .is_none_or(|bottom| bottom > display.info.height)
+    {
+        return Err(Error::Protocol);
+    }
+    submit_display_damage(client, display, x, y, width, height)
+}
+
+fn submit_display_damage(
+    client: &mut Client,
+    display: DisplayState,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<(), Error> {
     let response = transact(
         client,
         MdriverControlRequest::new(
@@ -981,6 +1069,9 @@ fn platform_display_info() -> Result<mnu::platform::DisplayInfo, mnu::platform::
             red_offset: info.red_offset,
             green_offset: info.green_offset,
             blue_offset: info.blue_offset,
+            surface_address: info.surface_address,
+            surface_size: info.surface_size,
+            shared_surface: info.shared_surface,
         })
         .map_err(platform_error)
 }
@@ -1005,6 +1096,15 @@ fn platform_display_transfer_limit() -> Result<usize, mnu::platform::PlatformErr
         .map_err(platform_error)
 }
 
+fn platform_commit_display(
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<(), mnu::platform::PlatformError> {
+    commit_display(x, y, width, height).map_err(platform_error)
+}
+
 fn platform_device_control(
     operation: u16,
     device_id: u32,
@@ -1023,6 +1123,7 @@ pub static PLATFORM_OPS: mnu::platform::PlatformOps = mnu::platform::PlatformOps
     display_info: platform_display_info,
     display_transfer_limit: platform_display_transfer_limit,
     present_display: platform_present_display,
+    commit_display: platform_commit_display,
     device_control: platform_device_control,
 };
 

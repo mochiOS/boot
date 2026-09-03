@@ -78,12 +78,17 @@ pub const MDRIVER_DEVICE_FEATURE_BLOCK_ASYNC_QUEUE: u64 = 1 << 11;
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_TILE: u64 = 1 << 12;
 /// A display accepts a tile spanning the registered display Grant pages.
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_BULK: u64 = 1 << 13;
+/// A display reads damage from a persistent full-frame shared surface.
+pub const MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE: u64 = 1 << 14;
 
 pub const MDRIVER_DISPLAY_BUFFER_PAGE: u64 = 7;
 pub const MDRIVER_DISPLAY_MAX_TRANSFER: u64 = 4096;
 pub const MDRIVER_DISPLAY_BULK_FIRST_PAGE: u64 = 9;
 pub const MDRIVER_DISPLAY_BULK_PAGE_COUNT: usize = 55;
 pub const MDRIVER_DISPLAY_BULK_MAX_TRANSFER: u64 = MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64 * 4096;
+pub const MDRIVER_DISPLAY_SURFACE_FIRST_PAGE: u64 = 9;
+pub const MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT: u64 = 64;
+pub const MDRIVER_DISPLAY_OPEN_SHARED_SURFACE: u64 = 1;
 pub const MDRIVER_DISPLAY_PIXEL_BYTES: u64 = 4;
 
 pub const MDRIVER_BLOCK_SECTOR_SIZE: u64 = 512;
@@ -246,5 +251,9 @@ mod tests {
             64
         );
         assert!(MDRIVER_DISPLAY_BUFFER_PAGE < MDRIVER_DISPLAY_BULK_FIRST_PAGE);
+        assert_eq!(
+            MDRIVER_DISPLAY_SURFACE_FIRST_PAGE,
+            MDRIVER_DISPLAY_BULK_FIRST_PAGE
+        );
     }
 }
