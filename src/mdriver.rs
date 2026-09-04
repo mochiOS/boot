@@ -16,15 +16,18 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_CONTROL_DISPLAY_INFO, MDRIVER_CONTROL_ENUMERATE, MDRIVER_CONTROL_INSPECT_STORAGE,
     MDRIVER_CONTROL_INSTALL_PARTITION, MDRIVER_CONTROL_NEGOTIATE, MDRIVER_CONTROL_OPEN_DEVICE,
     MDRIVER_CONTROL_OPEN_DISPLAY, MDRIVER_CONTROL_OPEN_PARTITION, MDRIVER_CONTROL_PING,
-    MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER,
+    MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_PRESENT_GPU_SCENE,
+    MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER,
     MDRIVER_CONTROL_START_SESSION, MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK,
     MDRIVER_CONTROL_VERSION, MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH, MDRIVER_DEVICE_FEATURE_BLOCK_READ,
     MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
-    MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE, MDRIVER_DEVICE_FEATURE_DISPLAY_TILE,
+    MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE, MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE,
+    MDRIVER_DEVICE_FEATURE_DISPLAY_TILE,
     MDRIVER_DEVICE_FEATURE_READ_ONLY,
     MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY, MDRIVER_DISPLAY_BUFFER_PAGE,
     MDRIVER_DISPLAY_BULK_FIRST_PAGE, MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
     MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_MAX_TRANSFER,
+    MDRIVER_DISPLAY_GPU_SCENE_COMMIT_WIDTH, MDRIVER_DISPLAY_GPU_SCENE_COMMIT_X,
     MDRIVER_DISPLAY_OPEN_SHARED_SURFACE, MDRIVER_DISPLAY_PIXEL_BYTES,
     MDRIVER_DISPLAY_SURFACE_FIRST_PAGE, MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT,
     MDRIVER_STORAGE_QUERY_PARTITION_GUIDS,
@@ -96,6 +99,7 @@ pub struct DisplayInfo {
     pub surface_address: u64,
     pub surface_size: u64,
     pub shared_surface: bool,
+    pub features: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -893,12 +897,15 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
             green_offset: (format >> 16) as u8,
             blue_offset: (format >> 24) as u8,
             surface_address: if shared_surface { data_address } else { 0 },
+            // Userspace maps this complete range for either pixels or a GPU
+            // scene. The visible framebuffer may occupy only its prefix.
             surface_size: if shared_surface {
-                surface_bytes
+                max_transfer as u64
             } else {
                 0
             },
             shared_surface,
+            features: candidate.features,
         },
         data_address,
         max_transfer,
@@ -963,6 +970,31 @@ pub fn commit_display(x: u32, y: u32, width: u32, height: u32) -> Result<(), Err
     let mut guard = CLIENT.lock();
     let client = guard.as_mut().ok_or(Error::Device)?;
     let display = ensure_display(client)?;
+    if x == MDRIVER_DISPLAY_GPU_SCENE_COMMIT_X
+        && width == MDRIVER_DISPLAY_GPU_SCENE_COMMIT_WIDTH
+        && height == 1
+    {
+        let scene_len = usize::try_from(y).map_err(|_| Error::Protocol)?;
+        if display.info.features & MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE == 0
+            || scene_len == 0
+            || scene_len > display.max_transfer
+        {
+            return Err(Error::Protocol);
+        }
+        let response = transact(
+            client,
+            MdriverControlRequest::new(
+                MDRIVER_CONTROL_PRESENT_GPU_SCENE,
+                display.device_id,
+                [scene_len as u64, 0, 0, 0],
+            ),
+        )?;
+        return if response.status == MDRIVER_CONTROL_STATUS_OK {
+            Ok(())
+        } else {
+            Err(Error::Device)
+        };
+    }
     if !display.shared_surface
         || x.checked_add(width)
             .is_none_or(|right| right > display.info.width)
