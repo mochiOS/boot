@@ -238,15 +238,6 @@ fn verify_cpuid(boot_info: &DomainBootInfo) {
 }
 
 fn system_endpoint(boot_info: &DomainBootInfo) {
-    let _ = unsafe {
-        invoke(
-            boot_info.hypervisor_backend,
-            HypercallNumber::WatchdogHeartbeat,
-            0,
-            0,
-            0,
-        )
-    };
     let ring = boot_info.grant_window_start as *mut SharedRingPage;
     unsafe { initialize(ring, RING_GENERATION) };
     let request =
