@@ -23,7 +23,6 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
     MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE, MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE,
     MDRIVER_DEVICE_FEATURE_DISPLAY_TILE,
-    MDRIVER_DEVICE_FEATURE_READ_ONLY,
     MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY, MDRIVER_DISPLAY_BUFFER_PAGE,
     MDRIVER_DISPLAY_BULK_FIRST_PAGE, MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
     MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_MAX_TRANSFER,
@@ -69,14 +68,6 @@ pub enum Error {
     Ring,
     Protocol,
     Device,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Summary {
-    pub device_count: u32,
-    pub block_device: bool,
-    pub block_read_only: bool,
-    pub display_device: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -140,7 +131,24 @@ struct Client {
 
 static CLIENT: SpinLock<Option<Client>> = SpinLock::new(None);
 
-pub fn initialize_client() -> Result<Summary, Error> {
+// Initialization may wait for another Domain. A concurrent caller must let
+// the initializing guest thread run, including on a single-vCPU system.
+struct InitializationYield;
+type Initialization = spin::once::Once<Result<(), Error>, InitializationYield>;
+
+impl spin::RelaxStrategy for InitializationYield {
+    fn relax() {
+        mnu::task::yield_now();
+        core::hint::spin_loop();
+    }
+}
+
+fn initialize_client() -> Result<(), Error> {
+    static INIT: Initialization = Initialization::new();
+    *INIT.call_once(connect_client)
+}
+
+fn connect_client() -> Result<(), Error> {
     if hypervisor_guest::feature_flags() & REQUIRED_FEATURES != REQUIRED_FEATURES {
         return Err(Error::Unsupported);
     }
@@ -252,30 +260,7 @@ pub fn initialize_client() -> Result<Summary, Error> {
         return Err(Error::Protocol);
     }
 
-    let mut summary = Summary {
-        device_count,
-        ..Summary::default()
-    };
-    if block_candidate_count != 0 {
-        summary.block_read_only = client.block_candidates[..block_candidate_count]
-            .iter()
-            .flatten()
-            .all(|candidate| candidate.features & MDRIVER_DEVICE_FEATURE_READ_ONLY != 0);
-    }
-    if let Some((candidate, unique_guid)) = find_installed_partition(&mut client)? {
-        let block = open_block_device(
-            &mut client,
-            grant_start,
-            candidate.device_id,
-            candidate.features,
-            Some(unique_guid),
-        )?;
-        summary.block_device = true;
-        summary.block_read_only = block.features & MDRIVER_DEVICE_FEATURE_READ_ONLY != 0;
-        client.block = Some(block);
-    }
     if let Some((device_id, features)) = display_candidate {
-        summary.display_device = features & MDRIVER_DEVICE_FEATURE_DISPLAY_TILE != 0;
         client.display_candidate = Some(DisplayCandidate {
             device_id,
             features,
@@ -286,10 +271,32 @@ pub fn initialize_client() -> Result<Summary, Error> {
     }
 
     *CLIENT.lock() = Some(client);
-    if summary.block_device && !mnu::cext::disk::activate_bundle(1, &MDRIVER_DISK_OPS) {
-        return Err(Error::Device);
-    }
-    Ok(summary)
+    Ok(())
+}
+
+fn initialize_storage() -> Result<(), Error> {
+    static INIT: Initialization = Initialization::new();
+    *INIT.call_once(|| {
+        initialize_client()?;
+        let (grant_start, _) = hypervisor_guest::grant_window().ok_or(Error::MissingGrantWindow)?;
+        let mut guard = CLIENT.lock();
+        let client = guard.as_mut().ok_or(Error::Device)?;
+        let Some((candidate, unique_guid)) = find_installed_partition(client)? else {
+            return Ok(());
+        };
+        client.block = Some(open_block_device(
+            client,
+            grant_start,
+            candidate.device_id,
+            candidate.features,
+            Some(unique_guid),
+        )?);
+        drop(guard);
+        if !mnu::cext::disk::activate_bundle(1, &MDRIVER_DISK_OPS) {
+            return Err(Error::Device);
+        }
+        Ok(())
+    })
 }
 
 fn find_installed_partition(
@@ -340,10 +347,7 @@ pub fn storage_control(
 
     // Physical storage discovery is demand-driven. It must never delay the
     // scheduler, service manager, or desktop during boot.
-    let initialized = CLIENT.lock().is_some();
-    if !initialized {
-        initialize_client()?;
-    }
+    initialize_storage()?;
 
     if operation == mnu_abi::STORAGE_CONTROL_LIST_DEVICE {
         let index = usize::try_from(arguments[0]).map_err(|_| Error::Protocol)?;
@@ -916,6 +920,7 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
 }
 
 pub fn display_info() -> Result<DisplayInfo, Error> {
+    initialize_client()?;
     let mut guard = CLIENT.lock();
     let client = guard.as_mut().ok_or(Error::Device)?;
     ensure_display(client).map(|display| display.info)
@@ -1119,6 +1124,7 @@ fn platform_present_display(
 }
 
 fn platform_display_transfer_limit() -> Result<usize, mnu::platform::PlatformError> {
+    initialize_client().map_err(platform_error)?;
     let mut guard = CLIENT.lock();
     let client = guard
         .as_mut()
