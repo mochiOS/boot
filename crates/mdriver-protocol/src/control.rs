@@ -24,8 +24,8 @@ pub const MDRIVER_CONTROL_CLOSE_DISPLAY: u16 = 21;
 pub const MDRIVER_CONTROL_INSTALL_PARTITION: u16 = 22;
 pub const MDRIVER_CONTROL_OPEN_PARTITION: u16 = 23;
 pub const MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER: u16 = 24;
-/// Submit a ViewKit compositor scene stored in the shared display surface.
 pub const MDRIVER_CONTROL_PRESENT_GPU_SCENE: u16 = 25;
+pub const MDRIVER_CONTROL_READ_POINTER: u16 = 26;
 
 pub const MDRIVER_CONTROL_STATUS_OK: u32 = 0;
 pub const MDRIVER_CONTROL_STATUS_UNSUPPORTED_VERSION: u32 = 1;
@@ -76,15 +76,10 @@ pub const MDRIVER_DEVICE_FEATURE_BLOCK_READ: u64 = 1 << 8;
 pub const MDRIVER_DEVICE_FEATURE_BLOCK_WRITE: u64 = 1 << 9;
 pub const MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH: u64 = 1 << 10;
 pub const MDRIVER_DEVICE_FEATURE_BLOCK_ASYNC_QUEUE: u64 = 1 << 11;
-/// A display accepts tightly packed 32-bit pixel tiles from one Grant page.
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_TILE: u64 = 1 << 12;
-/// A display accepts a tile spanning the registered display Grant pages.
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_BULK: u64 = 1 << 13;
-/// A display reads damage from a persistent full-frame shared surface.
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE: u64 = 1 << 14;
-/// The display can render a ViewKit compositor scene on the physical GPU.
 pub const MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE: u64 = 1 << 15;
-
 pub const MDRIVER_DISPLAY_BUFFER_PAGE: u64 = 7;
 pub const MDRIVER_DISPLAY_MAX_TRANSFER: u64 = 4096;
 pub const MDRIVER_DISPLAY_BULK_FIRST_PAGE: u64 = 9;
@@ -94,7 +89,6 @@ pub const MDRIVER_DISPLAY_SURFACE_FIRST_PAGE: u64 = 9;
 pub const MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT: u64 = 64;
 pub const MDRIVER_DISPLAY_OPEN_SHARED_SURFACE: u64 = 1;
 pub const MDRIVER_DISPLAY_PIXEL_BYTES: u64 = 4;
-/// Product-private framebuffer commit marker used to keep mnu's ABI generic.
 pub const MDRIVER_DISPLAY_GPU_SCENE_COMMIT_X: u32 = u32::from_le_bytes(*b"VKGS");
 pub const MDRIVER_DISPLAY_GPU_SCENE_COMMIT_WIDTH: u32 = u32::from_le_bytes(*b"GPU1");
 

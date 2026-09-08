@@ -42,7 +42,7 @@ use mochios_mdriver_protocol::{
 
 use mnu::cext::disk::McxDiskOps;
 use mnu::hypervisor_guest;
-use mnu::interrupt::spinlock::SpinLock;
+use spin::mutex::Mutex;
 
 const REQUIRED_FEATURES: u64 = DOMAIN_FEATURE_EVENT_CHANNEL
     | DOMAIN_FEATURE_EVENT_POLL
@@ -129,14 +129,16 @@ struct Client {
     display: Option<DisplayState>,
 }
 
-static CLIENT: SpinLock<Option<Client>> = SpinLock::new(None);
+// Transactions yield while waiting for the other Domain. Contenders must
+// also yield: an IRQ-disabling spinlock would strand the suspended owner.
+static CLIENT: Mutex<Option<Client>, ClientYield> = Mutex::new(None);
 
 // Initialization may wait for another Domain. A concurrent caller must let
 // the initializing guest thread run, including on a single-vCPU system.
-struct InitializationYield;
-type Initialization = spin::once::Once<Result<(), Error>, InitializationYield>;
+struct ClientYield;
+type Initialization = spin::once::Once<Result<(), Error>, ClientYield>;
 
-impl spin::RelaxStrategy for InitializationYield {
+impl spin::RelaxStrategy for ClientYield {
     fn relax() {
         mnu::task::yield_now();
         core::hint::spin_loop();
@@ -1144,11 +1146,23 @@ fn platform_commit_display(
 }
 
 fn platform_device_control(
+    authority: &str,
     operation: u16,
     device_id: u32,
     arguments: [u64; 4],
 ) -> Result<mnu::platform::DeviceControlResponse, mnu::platform::PlatformError> {
-    storage_control(operation, device_id, arguments)
+    (match authority {
+        "device.storage" => storage_control(operation, device_id, arguments),
+        "device.input" if operation == mochios_mdriver_protocol::control::MDRIVER_CONTROL_READ_POINTER
+            && device_id == 0 && arguments == [0; 4] => {
+            initialize_client().and_then(|()| {
+                let mut guard = CLIENT.lock();
+                let client = guard.as_mut().ok_or(Error::Device)?;
+                transact(client, MdriverControlRequest::new(operation, device_id, arguments))
+            })
+        }
+        _ => Err(Error::Protocol),
+    })
         .map(|response| mnu::platform::DeviceControlResponse {
             status: response.status,
             device_id: response.device_id,
