@@ -459,6 +459,7 @@ fn handshake_port(port: u32) -> Result<(), Error> {
 }
 
 fn wait_for_port(expected: u32) -> Result<(), Error> {
+    let mut domain_yielded = false;
     for _ in 0..CONTROL_POLL_LIMIT {
         let port = hypervisor_guest::invoke(HypercallNumber::EventPoll, 0, 0, 0);
         if port == u64::from(expected) {
@@ -467,15 +468,16 @@ fn wait_for_port(expected: u32) -> Result<(), Error> {
         if port != EVENT_CHANNEL_NO_EVENT {
             continue;
         }
+        // Recheck the response after running mDriver before giving up this
+        // guest thread while it still owns the shared control-ring lock.
+        // Slow requests must still let other System Domain threads run.
+        if domain_yielded && mnu::task::is_scheduler_enabled() {
+            mnu::task::yield_now();
+        }
         if hypervisor_guest::invoke(HypercallNumber::Yield, 0, 0, 0) != HYPERCALL_SUCCESS {
             return Err(Error::Hypercall);
         }
-        // Hypervisor Yield schedules another Domain, not another guest
-        // thread. Explicitly yield here as well so a slow hardware response
-        // cannot starve the service manager and desktop on a single vCPU.
-        if mnu::task::is_scheduler_enabled() {
-            mnu::task::yield_now();
-        }
+        domain_yielded = true;
     }
     Err(Error::Timeout)
 }
