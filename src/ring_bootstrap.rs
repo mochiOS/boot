@@ -55,10 +55,16 @@ global_asm!(
     ".global mnu_domain_verify_cpuid_scratch",
     "mnu_domain_verify_cpuid_scratch:",
     "push rbx",
+    // Exercise the SSE state exposed by CPUID as well as integer scratch state.
+    "mov rax, cr4",
+    "or rax, 512",
+    "mov cr4, rax",
     "movabs r8, 0x1827364554637281",
     "movabs r9, 0x2938475665748392",
     "movabs r10, 0x3a495867768594a3",
     "movabs r11, 0x4b5a69788796a5b4",
+    "movq xmm0, r8",
+    "movq xmm15, r11",
     "xor eax, eax",
     "xor ecx, ecx",
     "cpuid",
@@ -73,6 +79,12 @@ global_asm!(
     "jne 2f",
     "movabs rax, 0x4b5a69788796a5b4",
     "cmp r11, rax",
+    "jne 2f",
+    "movq rax, xmm0",
+    "cmp rax, r8",
+    "jne 2f",
+    "movq rax, xmm15",
+    "cmp rax, r11",
     "jne 2f",
     "mov eax, 1",
     "pop rbx",
@@ -181,7 +193,13 @@ fn verify_cpuid(boot_info: &DomainBootInfo) {
         )
     }
     let basic = __cpuid_count(0, 0);
-    let cpu_vendor = *b"MochiOS CPU ";
+    let cpu_vendor = if boot_info.hypervisor_backend
+        == mnu_abi::hypervisor::HYPERVISOR_BACKEND_AMD_SVM
+    {
+        *b"AuthenticAMD"
+    } else {
+        *b"GenuineIntel"
+    };
     if basic.eax < 0x0b
         || basic.ebx != u32::from_le_bytes(cpu_vendor[0..4].try_into().unwrap())
         || basic.edx != u32::from_le_bytes(cpu_vendor[4..8].try_into().unwrap())

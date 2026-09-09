@@ -129,9 +129,85 @@ struct Client {
     display: Option<DisplayState>,
 }
 
-// Transactions yield while waiting for the other Domain. Contenders must
-// also yield: an IRQ-disabling spinlock would strand the suspended owner.
-static CLIENT: Mutex<Option<Client>, ClientYield> = Mutex::new(None);
+// The ring and transfer buffers admit one owner. Never keep the state lock
+// across an external transaction: contenders sleep until ownership is returned.
+static CLIENT: ClientStore = ClientStore(Mutex::new(ClientSlot {
+    value: None,
+    borrowed: false,
+    waiters: [None; mnu::task::ThreadQueue::MAX_THREADS],
+}));
+
+struct ClientSlot {
+    value: Option<Client>,
+    borrowed: bool,
+    waiters: [Option<mnu::task::ThreadId>; mnu::task::ThreadQueue::MAX_THREADS],
+}
+
+struct ClientStore(Mutex<ClientSlot>);
+
+struct ClientLease<'a> {
+    store: &'a ClientStore,
+    value: Option<Client>,
+}
+
+impl ClientStore {
+    fn lock(&self) -> ClientLease<'_> {
+        loop {
+            let value = x86_64::instructions::interrupts::without_interrupts(|| {
+                let mut slot = self.0.lock();
+                if !slot.borrowed {
+                    slot.borrowed = true;
+                    return Some(slot.value.take());
+                }
+                if mnu::task::is_scheduler_enabled() {
+                    if let Some(tid) = mnu::task::current_thread_id() {
+                        if let Some(index) = mnu::task::thread_slot_index(tid) {
+                            slot.waiters[index] = Some(tid);
+                            // Registration and sleeping are protected by the same
+                            // lock as return, so a wakeup cannot pass between them.
+                            mnu::task::sleep_thread(tid);
+                        }
+                    }
+                }
+                None
+            });
+            if let Some(value) = value {
+                return ClientLease { store: self, value };
+            }
+            mnu::task::yield_now();
+        }
+    }
+}
+
+impl core::ops::Deref for ClientLease<'_> {
+    type Target = Option<Client>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl core::ops::DerefMut for ClientLease<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+impl Drop for ClientLease<'_> {
+    fn drop(&mut self) {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let waiters = {
+                let mut slot = self.store.0.lock();
+                slot.value = self.value.take();
+                slot.borrowed = false;
+                core::mem::replace(&mut slot.waiters, [None; mnu::task::ThreadQueue::MAX_THREADS])
+            };
+            for tid in waiters.into_iter().flatten() {
+                mnu::task::wake_thread(tid);
+            }
+        });
+    }
+}
 
 // Initialization may wait for another Domain. A concurrent caller must let
 // the initializing guest thread run, including on a single-vCPU system.
@@ -459,7 +535,6 @@ fn handshake_port(port: u32) -> Result<(), Error> {
 }
 
 fn wait_for_port(expected: u32) -> Result<(), Error> {
-    let mut domain_yielded = false;
     for _ in 0..CONTROL_POLL_LIMIT {
         let port = hypervisor_guest::invoke(HypercallNumber::EventPoll, 0, 0, 0);
         if port == u64::from(expected) {
@@ -468,16 +543,12 @@ fn wait_for_port(expected: u32) -> Result<(), Error> {
         if port != EVENT_CHANNEL_NO_EVENT {
             continue;
         }
-        // Recheck the response after running mDriver before giving up this
-        // guest thread while it still owns the shared control-ring lock.
-        // Slow requests must still let other System Domain threads run.
-        if domain_yielded && mnu::task::is_scheduler_enabled() {
-            mnu::task::yield_now();
-        }
+        // The request receiver runs concurrently on another host CPU. Yield
+        // only the Domain slice; yielding the OS thread here rotates through
+        // every System Domain thread and turns one response into 40-180 ms.
         if hypervisor_guest::invoke(HypercallNumber::Yield, 0, 0, 0) != HYPERCALL_SUCCESS {
             return Err(Error::Hypercall);
         }
-        domain_yielded = true;
     }
     Err(Error::Timeout)
 }
