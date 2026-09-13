@@ -952,12 +952,16 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
             } else {
                 println!("AP trampoline reservation failed; SMP startup will be disabled");
             }
+
+            println!("after AP trampoline");
         }
     }
 
     // Boot servicesを終了してメモリマップを取得
     let (_system_table, memory_map_iter) =
         unsafe { system_table.exit_boot_services(UefiMemType::LOADER_DATA) };
+
+    println!("boot service exit");
 
     let map_count;
     unsafe {
@@ -984,6 +988,8 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         }
         map_count = count;
     }
+
+    println!("memory map");
 
     #[allow(static_mut_refs)]
     unsafe {
