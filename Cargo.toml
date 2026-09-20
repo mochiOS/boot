@@ -6,7 +6,7 @@ authors = ["tas0dev"]
 default-run = "boot"
 
 [workspace]
-members = [".", "crates/mdriver-protocol"]
+members = [".", "crates/mdriver-protocol", "crates/boot-selection"]
 
 [[bin]]
 name = "boot"
@@ -83,6 +83,7 @@ sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 mnu-abi = { git = "https://github.com/mochiOS/mnu", package = "mnu-abi" }
 mnu = { git = "https://github.com/mochiOS/mnu", default-features = false, optional = true }
 mochios-mdriver-protocol = { path = "crates/mdriver-protocol" }
+mochios-boot-selection = { path = "crates/boot-selection" }
 
 [profile.dev]
 panic = "abort"

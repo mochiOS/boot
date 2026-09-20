@@ -5,12 +5,15 @@ extern crate alloc;
 
 mod console;
 mod panic;
+mod boot_state;
 
 use core::ptr::addr_of_mut;
 use mnu_abi::boot::{
     BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_FRAMEBUFFER,
-    BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP, MAX_BOOT_MEMORY_REGIONS,
-    MAX_CPU_IDS,
+    BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP,
+    BOOT_FEATURE_BOOT_ESP_GUID, BOOT_FEATURE_SYSTEM_SLOT, BOOT_SYSTEM_SLOT_A, BOOT_SYSTEM_SLOT_B,
+    BOOT_SYSTEM_SLOT_LEGACY,
+    MAX_BOOT_MEMORY_REGIONS, MAX_CPU_IDS,
 };
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
@@ -302,8 +305,7 @@ unsafe fn find_elf_symbol_in_file(
     None
 }
 
-unsafe fn read_kernel_meta_secondary_entry(root: &mut impl File) -> Option<u64> {
-    let meta_path = cstr16!(r"\system\kernel.meta");
+unsafe fn read_kernel_meta_secondary_entry(root: &mut impl File, meta_path: &uefi::CStr16) -> Option<u64> {
     let fh = root
         .open(meta_path, FileMode::Read, FileAttribute::empty())
         .ok()?;
@@ -386,8 +388,12 @@ unsafe fn populate_cpu_info(bt: &BootServices) {
 fn tick_booting_gif() {}
 
 /// `\system\initfs.img` を読み込んで物理アドレスとサイズを返す
-unsafe fn load_initfs(bt: &BootServices, image_handle: Handle) -> (u64, usize) {
-    let initfs_path = cstr16!(r"\system\initfs.img");
+unsafe fn load_initfs(
+    bt: &BootServices,
+    image_handle: Handle,
+    initfs_path: &uefi::CStr16,
+    allow_fallback: bool,
+) -> (u64, usize) {
 
     // LoadedImage デバイスを優先
     let handles: alloc::vec::Vec<Handle> =
@@ -396,10 +402,12 @@ unsafe fn load_initfs(bt: &BootServices, image_handle: Handle) -> (u64, usize) {
                 drop(li);
                 alloc::vec![dev]
             } else {
-                bt.find_handles::<SimpleFileSystem>().unwrap_or_default()
+                if allow_fallback { bt.find_handles::<SimpleFileSystem>().unwrap_or_default() }
+                else { alloc::vec::Vec::new() }
             }
         } else {
-            bt.find_handles::<SimpleFileSystem>().unwrap_or_default()
+            if allow_fallback { bt.find_handles::<SimpleFileSystem>().unwrap_or_default() }
+            else { alloc::vec::Vec::new() }
         };
 
     for handle in handles {
@@ -472,8 +480,13 @@ unsafe fn try_load_raw(
 }
 
 /// `\system\kernel.elf` を読み込み、PT_LOAD セグメントを物理アドレスに展開してエントリアドレスを返す
-unsafe fn load_kernel(bt: &BootServices, image_handle: Handle) -> Option<(u64, u64)> {
-    let kernel_path = cstr16!(r"\system\kernel.elf");
+unsafe fn load_kernel(
+    bt: &BootServices,
+    image_handle: Handle,
+    kernel_path: &uefi::CStr16,
+    meta_path: &uefi::CStr16,
+    allow_fallback: bool,
+) -> Option<(u64, u64)> {
 
     // LoadedImage からブートローダー自身のデバイスハンドルを取得して優先的に試みる
     match bt.open_protocol_exclusive::<LoadedImage>(image_handle) {
@@ -483,7 +496,7 @@ unsafe fn load_kernel(bt: &BootServices, image_handle: Handle) -> Option<(u64, u
             Some(dev) => {
                 drop(loaded_image);
                 tick_booting_gif();
-                if let Some(entry) = try_load_from(bt, image_handle, dev, kernel_path) {
+                if let Some(entry) = try_load_from(bt, image_handle, dev, kernel_path, meta_path) {
                     return Some(entry);
                 }
                 println!("try_load_from (device handle) failed");
@@ -491,7 +504,8 @@ unsafe fn load_kernel(bt: &BootServices, image_handle: Handle) -> Option<(u64, u
         },
     }
 
-    // フォールバック: 全 SimpleFileSystem ハンドルをスキャンして kernel.elf を探す
+    if !allow_fallback { return None; }
+    // 旧形式のみ: 全 SimpleFileSystem ハンドルをスキャンして kernel.elf を探す
     match bt.find_handles::<SimpleFileSystem>() {
         Err(e) => {
             println!("find_handles failed: {:?}", e.status());
@@ -501,7 +515,7 @@ unsafe fn load_kernel(bt: &BootServices, image_handle: Handle) -> Option<(u64, u
             println!("SFS handle count: {}", sfs_handles.len());
             for handle in sfs_handles {
                 tick_booting_gif();
-                if let Some(entry) = try_load_from(bt, image_handle, handle, kernel_path) {
+                if let Some(entry) = try_load_from(bt, image_handle, handle, kernel_path, meta_path) {
                     return Some(entry);
                 }
             }
@@ -517,6 +531,7 @@ unsafe fn try_load_from(
     agent: Handle,
     handle: Handle,
     kernel_path: &uefi::CStr16,
+    meta_path: &uefi::CStr16,
 ) -> Option<(u64, u64)> {
     // GetProtocol で非排他的に開く（ファームウェアが既に開いていても失敗しない）
     let mut sfs = match bt.open_protocol::<SimpleFileSystem>(
@@ -541,7 +556,7 @@ unsafe fn try_load_from(
         }
     };
 
-    let secondary_meta = read_kernel_meta_secondary_entry(&mut root);
+    let secondary_meta = read_kernel_meta_secondary_entry(&mut root, meta_path);
 
     // カーネル ELF を開く
     let file_handle = match root.open(kernel_path, FileMode::Read, FileAttribute::empty()) {
@@ -903,10 +918,56 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     println!("mochiOS bootloader");
     println!("Framebuffer: {}x{} stride={}", screen_w, screen_h, stride);
 
+    let boot_slot = match boot_state::probe(system_table.boot_services(), image_handle) {
+        boot_state::Probe::Legacy => None,
+        boot_state::Probe::Stable(slot) => {
+            println!("A/B boot state found; booting system {:?}", slot);
+            Some(slot)
+        }
+        boot_state::Probe::Trial { slot, attempts_remaining } => {
+            println!("A/B trial boot: system {:?} attempts remaining={}", slot, attempts_remaining);
+            Some(slot)
+        }
+        boot_state::Probe::WriteFailedFallback(slot) => {
+            println!("A/B boot-state write failed; booting stable system {:?}", slot);
+            Some(slot)
+        }
+        boot_state::Probe::Invalid => {
+            println!("A/B boot state cannot be safely used by this loader");
+            return Status::UNSUPPORTED;
+        }
+    };
+    let ab_layout = boot_slot.is_some();
+    let boot_esp_guid = if ab_layout {
+        boot_state::boot_esp_guid(system_table.boot_services(), image_handle)
+    } else {
+        None
+    };
+    if ab_layout {
+        println!("A/B boot ESP identity: {}", if boot_esp_guid.is_some() { "available" } else { "unavailable" });
+    }
+    let (kernel_path, meta_path, initfs_path) = match boot_slot {
+        Some(mochios_boot_selection::Slot::A) => (
+            cstr16!(r"\slots\A\kernel.elf"),
+            cstr16!(r"\slots\A\kernel.meta"),
+            cstr16!(r"\slots\A\initfs.img"),
+        ),
+        Some(mochios_boot_selection::Slot::B) => (
+            cstr16!(r"\slots\B\kernel.elf"),
+            cstr16!(r"\slots\B\kernel.meta"),
+            cstr16!(r"\slots\B\initfs.img"),
+        ),
+        None => (
+            cstr16!(r"\system\kernel.elf"),
+            cstr16!(r"\system\kernel.meta"),
+            cstr16!(r"\system\initfs.img"),
+        ),
+    };
+
     // カーネルをロード
     let kernel_entry_addrs = {
         let bt = system_table.boot_services();
-        unsafe { load_kernel(bt, image_handle) }
+        unsafe { load_kernel(bt, image_handle, kernel_path, meta_path, !ab_layout) }
     };
     let kernel_entry_addrs = match kernel_entry_addrs {
         Some(addrs) => addrs,
@@ -919,8 +980,13 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     // initfsをESPから読み込む
     let (initfs_addr, initfs_size) = {
         let bt = system_table.boot_services();
-        unsafe { load_initfs(bt, image_handle) }
+        unsafe { load_initfs(bt, image_handle, initfs_path, !ab_layout) }
     };
+    if ab_layout && initfs_size == 0 {
+        println!("A/B slot initfs is unavailable");
+        return Status::NOT_FOUND;
+    }
+    if let Some(slot) = boot_slot { println!("A/B boot assets: slot {:?}", slot); }
 
     let rootfs_addr = 0u64;
     let rootfs_size = 0usize;
@@ -1008,9 +1074,21 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         BOOT_INFO.initfs_size = initfs_size as u64;
         BOOT_INFO.rootfs_addr = rootfs_addr;
         BOOT_INFO.rootfs_size = rootfs_size as u64;
+        BOOT_INFO.system_slot = match boot_slot {
+            Some(mochios_boot_selection::Slot::A) => BOOT_SYSTEM_SLOT_A,
+            Some(mochios_boot_selection::Slot::B) => BOOT_SYSTEM_SLOT_B,
+            None => BOOT_SYSTEM_SLOT_LEGACY,
+        };
+        BOOT_INFO.boot_esp_guid = boot_esp_guid.unwrap_or([0; 16]);
         BOOT_INFO.smp_handoff_addr = addr_of_mut!(SMP_HANDOFF) as u64;
         BOOT_INFO.smp_handoff_size = core::mem::size_of::<SmpHandoff>() as u32;
         BOOT_INFO.feature_flags = BOOT_FEATURE_SMP;
+        if ab_layout {
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_SYSTEM_SLOT;
+        }
+        if boot_esp_guid.is_some() {
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_BOOT_ESP_GUID;
+        }
         if fb_addr != 0 && fb_size != 0 {
             BOOT_INFO.feature_flags |= BOOT_FEATURE_FRAMEBUFFER;
         }

@@ -1,0 +1,19 @@
+[package]
+name = "mochios-boot-selection"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "boot-selection-seed"
+path = "src/bin/seed.rs"
+
+[[bin]]
+name = "boot-selection-confirm-test"
+path = "src/bin/confirm_test.rs"
+
+[[bin]]
+name = "boot-selection-gpt-probe"
+path = "src/bin/gpt_probe.rs"

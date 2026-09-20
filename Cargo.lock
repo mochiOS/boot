@@ -107,7 +107,7 @@ checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 [[package]]
 name = "mnu"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#aa42c79bf2bff675065199b538a80245b859255f"
+source = "git+https://github.com/mochiOS/mnu#291cbd9b709d1222be22fbffa0881399c246ec67"
 dependencies = [
  "linked_list_allocator",
  "mnu-abi",
@@ -126,7 +126,7 @@ version = "0.1.0"
 [[package]]
 name = "mnu-csprng"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#aa42c79bf2bff675065199b538a80245b859255f"
+source = "git+https://github.com/mochiOS/mnu#291cbd9b709d1222be22fbffa0881399c246ec67"
 dependencies = [
  "rand_chacha",
  "rand_core",
@@ -136,12 +136,12 @@ dependencies = [
 [[package]]
 name = "mnu-metrics"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#aa42c79bf2bff675065199b538a80245b859255f"
+source = "git+https://github.com/mochiOS/mnu#291cbd9b709d1222be22fbffa0881399c246ec67"
 
 [[package]]
 name = "mnu-time-core"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#aa42c79bf2bff675065199b538a80245b859255f"
+source = "git+https://github.com/mochiOS/mnu#291cbd9b709d1222be22fbffa0881399c246ec67"
 
 [[package]]
 name = "mochiOS"
@@ -150,12 +150,17 @@ dependencies = [
  "linked_list_allocator",
  "mnu",
  "mnu-abi",
+ "mochios-boot-selection",
  "mochios-mdriver-protocol",
  "sha2",
  "spin",
  "uefi",
  "x86_64",
 ]
+
+[[package]]
+name = "mochios-boot-selection"
+version = "0.1.0"
 
 [[package]]
 name = "mochios-mdriver-protocol"
@@ -379,18 +384,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.56"
+version = "0.8.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "556764e583adb45a9f8d413c2a147fa7e8d821e48e12b14fd560b607998b75eb"
+checksum = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.56"
+version = "0.8.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2ab42fc20575779bd240faa45f94a74256f755c0fa9e89f0ede20d91d0cdfc1"
+checksum = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
 dependencies = [
  "proc-macro2",
  "quote",
