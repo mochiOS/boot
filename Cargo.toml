@@ -74,6 +74,7 @@ kcfi = []
 cet-ibt = []
 cet-shadow-stack = []
 development-system-key = []
+require-secure-boot = []
 
 [dependencies]
 uefi = { version = "0.30", features = ["alloc", "logger", "global_allocator"], optional = true }

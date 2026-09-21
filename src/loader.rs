@@ -7,6 +7,8 @@ mod console;
 mod panic;
 mod boot_state;
 mod system_image;
+#[cfg(feature = "require-secure-boot")]
+mod secure_boot;
 
 use core::ptr::addr_of_mut;
 use mnu_abi::boot::{
@@ -918,6 +920,12 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
 
     println!("mochiOS bootloader");
     println!("Framebuffer: {}x{} stride={}", screen_w, screen_h, stride);
+
+    #[cfg(feature = "require-secure-boot")]
+    match secure_boot::require_enabled(system_table.runtime_services()) {
+        Ok(()) => println!("UEFI Secure Boot verified"),
+        Err(error) => { println!("boot rejected: {}", error); return Status::SECURITY_VIOLATION; }
+    }
 
     let boot_slot = match boot_state::probe(system_table.boot_services(), image_handle) {
         boot_state::Probe::Legacy => None,
