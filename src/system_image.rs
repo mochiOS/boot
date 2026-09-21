@@ -1,5 +1,7 @@
 use mochios_boot_selection::Slot;
-use mochios_system_image::{Architecture, ArtifactDigests, Manifest};
+use mochios_system_image::{Architecture, ArtifactDigests, Manifest, RELEASE_PUBLIC_KEY};
+#[cfg(feature = "development-system-key")]
+use mochios_system_image::DEVELOPMENT_PUBLIC_KEY;
 use sha2::{Digest, Sha256};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::loaded_image::LoadedImage;
@@ -9,19 +11,6 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType};
 use uefi::{guid, Handle};
 
 const SYSTEM_TYPE: GptPartitionType = GptPartitionType(guid!("6d6f6368-694f-5300-8000-6d5061727401"));
-const RELEASE_KEY: [u8; 32] = [
-    0xec, 0x68, 0x7e, 0xc6, 0x85, 0x04, 0x42, 0xc3,
-    0x85, 0xdc, 0x7a, 0x19, 0x5c, 0xaf, 0xb2, 0xe0,
-    0xeb, 0x59, 0x73, 0x1f, 0x71, 0x6b, 0xfa, 0x16,
-    0x86, 0x72, 0xba, 0xf8, 0x93, 0xfb, 0x1d, 0xb8,
-];
-#[cfg(feature = "development-system-key")]
-const DEVELOPMENT_KEY: [u8; 32] = [
-    0x93, 0x42, 0x5a, 0xde, 0x29, 0xe8, 0x0d, 0x01,
-    0x80, 0x3b, 0xbe, 0x01, 0x58, 0x3c, 0x78, 0xa4,
-    0x86, 0x6c, 0x09, 0x20, 0xc1, 0xfe, 0x17, 0x48,
-    0xb7, 0xb8, 0x9a, 0xb2, 0x93, 0x4a, 0x2f, 0xf4,
-];
 const CHUNK_BYTES: usize = 64 * 1024;
 
 pub fn verify(bt: &BootServices, image_handle: Handle, slot: Slot) -> Result<u64, &'static str> {
@@ -73,9 +62,9 @@ pub fn verify(bt: &BootServices, image_handle: Handle, slot: Slot) -> Result<u64
         lba += count;
     }
     #[cfg(feature = "development-system-key")]
-    let keys = &[RELEASE_KEY, DEVELOPMENT_KEY][..];
+    let keys = &[RELEASE_PUBLIC_KEY, DEVELOPMENT_PUBLIC_KEY][..];
     #[cfg(not(feature = "development-system-key"))]
-    let keys = &[RELEASE_KEY][..];
+    let keys = &[RELEASE_PUBLIC_KEY][..];
     let digests = ArtifactDigests {
         system: digest.finalize().into(),
         kernel: hash_slot_region(bt, boot.handle, boot.header.kernel)?,

@@ -11,6 +11,18 @@ const SLOT_MAGIC: &[u8; 8] = b"MOSLOT\0\0";
 const FORMAT_VERSION: u16 = 2;
 const SLOT_FORMAT_VERSION: u16 = 1;
 const CONTEXT: &[u8] = b"mochios-system-slot-v2\0";
+pub const RELEASE_PUBLIC_KEY: [u8; 32] = [
+    0xec, 0x68, 0x7e, 0xc6, 0x85, 0x04, 0x42, 0xc3,
+    0x85, 0xdc, 0x7a, 0x19, 0x5c, 0xaf, 0xb2, 0xe0,
+    0xeb, 0x59, 0x73, 0x1f, 0x71, 0x6b, 0xfa, 0x16,
+    0x86, 0x72, 0xba, 0xf8, 0x93, 0xfb, 0x1d, 0xb8,
+];
+pub const DEVELOPMENT_PUBLIC_KEY: [u8; 32] = [
+    0x93, 0x42, 0x5a, 0xde, 0x29, 0xe8, 0x0d, 0x01,
+    0x80, 0x3b, 0xbe, 0x01, 0x58, 0x3c, 0x78, 0xa4,
+    0x86, 0x6c, 0x09, 0x20, 0xc1, 0xfe, 0x17, 0x48,
+    0xb7, 0xb8, 0x9a, 0xb2, 0x93, 0x4a, 0x2f, 0xf4,
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Architecture { X86_64 = 1, Aarch64 = 2 }
@@ -189,6 +201,9 @@ impl Manifest {
 
     pub fn as_bytes(&self) -> &[u8; MANIFEST_LEN] { &self.bytes }
     pub fn architecture(&self) -> Architecture { if self.bytes[13] == 1 { Architecture::X86_64 } else { Architecture::Aarch64 } }
+    pub fn version(&self) -> &str {
+        core::str::from_utf8(&self.bytes[37..37 + self.bytes[36] as usize]).unwrap()
+    }
     pub fn build(&self) -> u64 { u64::from_le_bytes(self.bytes[20..28].try_into().unwrap()) }
     pub fn image_size(&self) -> u64 { u64::from_le_bytes(self.bytes[28..36].try_into().unwrap()) }
     pub fn verify(&self, actual: &ArtifactDigests, keys: &[[u8; 32]]) -> Result<(), Error> {
