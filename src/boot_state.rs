@@ -92,7 +92,13 @@ pub fn boot_esp_guid(bt: &BootServices, image_handle: Handle) -> Option<[u8; 16]
     if kind != GptPartitionType::EFI_SYSTEM_PARTITION {
         return None;
     }
-    let guid = entry.unique_partition_guid.to_bytes();
+    // `uguid::Guid::to_bytes` preserves the UEFI/GPT in-memory byte order for
+    // the first three fields. BootInfo carries the canonical RFC 4122 byte
+    // representation so OS-side GPT readers do not depend on a firmware type.
+    let mut guid = entry.unique_partition_guid.to_bytes();
+    guid[..4].reverse();
+    guid[4..6].reverse();
+    guid[6..8].reverse();
     (guid != [0; 16]).then_some(guid)
 }
 
