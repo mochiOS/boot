@@ -7,6 +7,7 @@ mod console;
 mod panic;
 mod boot_state;
 mod system_image;
+mod slot_image;
 mod anti_rollback;
 #[cfg(feature = "require-secure-boot")]
 mod secure_boot;
@@ -195,7 +196,7 @@ unsafe fn allocate_ap_trampoline(bt: &BootServices) -> Option<u64> {
 }
 
 unsafe fn find_elf_symbol_in_file(
-    file: &mut RegularFile,
+    file: &mut impl LoaderReader,
     hdr_buf: &[u8],
     symbol_name: &str,
 ) -> Option<u64> {
@@ -305,6 +306,59 @@ unsafe fn find_elf_symbol_in_file(
                 }
             }
         }
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+struct LoaderReadError;
+
+impl LoaderReadError {
+    const fn status(self) -> Status { Status::DEVICE_ERROR }
+}
+
+trait LoaderReader {
+    fn set_position(&mut self, position: u64) -> Result<(), LoaderReadError>;
+    fn read(&mut self, destination: &mut [u8]) -> Result<usize, LoaderReadError>;
+}
+
+impl LoaderReader for RegularFile {
+    fn set_position(&mut self, position: u64) -> Result<(), LoaderReadError> {
+        RegularFile::set_position(self, position).map_err(|_| LoaderReadError)
+    }
+
+    fn read(&mut self, destination: &mut [u8]) -> Result<usize, LoaderReadError> {
+        RegularFile::read(self, destination).map_err(|_| LoaderReadError)
+    }
+}
+
+struct SliceReader<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl LoaderReader for SliceReader<'_> {
+    fn set_position(&mut self, position: u64) -> Result<(), LoaderReadError> {
+        let position = usize::try_from(position).map_err(|_| LoaderReadError)?;
+        if position > self.bytes.len() { return Err(LoaderReadError); }
+        self.position = position;
+        Ok(())
+    }
+
+    fn read(&mut self, destination: &mut [u8]) -> Result<usize, LoaderReadError> {
+        let available = self.bytes.len().saturating_sub(self.position);
+        let length = core::cmp::min(available, destination.len());
+        destination[..length].copy_from_slice(&self.bytes[self.position..self.position + length]);
+        self.position += length;
+        Ok(length)
+    }
+}
+
+fn kernel_meta_secondary_entry(bytes: &[u8]) -> Option<u64> {
+    let text = core::str::from_utf8(bytes).ok()?;
+    for line in text.lines() {
+        let Some(value) = line.strip_prefix("secondary_cpu_entry=0x") else { continue };
+        if let Ok(address) = u64::from_str_radix(value.trim(), 16) { return Some(address); }
     }
     None
 }
@@ -590,6 +644,16 @@ unsafe fn try_load_from(
     let file_size = info.file_size() as usize;
     println!("kernel.elf size: {} bytes", file_size);
 
+    load_kernel_reader(bt, &mut file, file_size, secondary_meta)
+}
+
+unsafe fn load_kernel_reader(
+    bt: &BootServices,
+    file: &mut impl LoaderReader,
+    _file_size: usize,
+    secondary_meta: Option<u64>,
+) -> Option<(u64, u64)> {
+
     // ELF ヘッダとプログラムヘッダを小さなスタックバッファで先読みし、
     // カーネルのロードアドレス範囲を確定してからページを先に確保する。
     // (フルバッファを AnyPages で先に確保すると 0x200000 に配置される場合があり、
@@ -863,7 +927,7 @@ unsafe fn try_load_from(
         }
     } else {
         println!("kernel.meta missing or unreadable; falling back to symtab");
-        match find_elf_symbol_in_file(&mut file, &hdr_buf, "secondary_cpu_entry") {
+        match find_elf_symbol_in_file(file, &hdr_buf, "secondary_cpu_entry") {
             Some(ptr) => match (ptr as i128 + load_delta).try_into().ok() {
                 Some(addr) => addr,
                 None => {
@@ -878,6 +942,48 @@ unsafe fn try_load_from(
         }
     };
     Some((entry, secondary_entry))
+}
+
+unsafe fn load_kernel_slot(
+    bt: &BootServices,
+    image_handle: Handle,
+    slot: mochios_boot_selection::Slot,
+) -> Option<(u64, u64)> {
+    let opened = match slot_image::open(bt, image_handle, slot) {
+        Ok(opened) => opened,
+        Err(error) => { println!("Boot {:?} unavailable: {}", slot, error); return None; }
+    };
+    let kernel = match slot_image::read_vec(bt, opened.handle, opened.header.kernel) {
+        Ok(kernel) => kernel,
+        Err(error) => { println!("kernel.elf read failed: {}", error); return None; }
+    };
+    let metadata = match slot_image::read_vec(bt, opened.handle, opened.header.kernel_meta) {
+        Ok(metadata) => metadata,
+        Err(error) => { println!("kernel.meta read failed: {}", error); return None; }
+    };
+    println!("kernel.elf size: {} bytes", kernel.len());
+    let kernel_len = kernel.len();
+    let secondary = kernel_meta_secondary_entry(&metadata);
+    let mut reader = SliceReader { bytes: &kernel, position: 0 };
+    load_kernel_reader(bt, &mut reader, kernel_len, secondary)
+}
+
+unsafe fn load_initfs_slot(
+    bt: &BootServices,
+    image_handle: Handle,
+    slot: mochios_boot_selection::Slot,
+) -> Option<(u64, usize)> {
+    let opened = slot_image::open(bt, image_handle, slot).ok()?;
+    let size = usize::try_from(opened.header.initfs.length).ok()?;
+    let pages = size.checked_add(4095)? / 4096;
+    let address = bt.allocate_pages(AllocateType::AnyPages, UefiMemType::LOADER_DATA, pages).ok()?;
+    let destination = core::slice::from_raw_parts_mut(address as *mut u8, size);
+    if let Err(error) = slot_image::read_exact(bt, opened.handle, opened.header.initfs, destination) {
+        println!("initfs read failed: {}", error);
+        return None;
+    }
+    println!("initfs loaded at {:#x} ({} bytes)", address, size);
+    Some((address, size))
 }
 
 /// UEFI エントリーポイント
@@ -956,30 +1062,12 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     if ab_layout {
         println!("A/B boot ESP identity: {}", if boot_esp_guid.is_some() { "available" } else { "unavailable" });
     }
-    let (kernel_path, meta_path, initfs_path, system_manifest_path) = match boot_slot {
-        Some(mochios_boot_selection::Slot::A) => (
-            cstr16!(r"\slots\A\kernel.elf"),
-            cstr16!(r"\slots\A\kernel.meta"),
-            cstr16!(r"\slots\A\initfs.img"),
-            Some(cstr16!(r"\slots\A\system.manifest")),
-        ),
-        Some(mochios_boot_selection::Slot::B) => (
-            cstr16!(r"\slots\B\kernel.elf"),
-            cstr16!(r"\slots\B\kernel.meta"),
-            cstr16!(r"\slots\B\initfs.img"),
-            Some(cstr16!(r"\slots\B\system.manifest")),
-        ),
-        None => (
-            cstr16!(r"\system\kernel.elf"),
-            cstr16!(r"\system\kernel.meta"),
-            cstr16!(r"\system\initfs.img"),
-            None,
-        ),
-    };
+    let kernel_path = cstr16!(r"\system\kernel.elf");
+    let meta_path = cstr16!(r"\system\kernel.meta");
+    let initfs_path = cstr16!(r"\system\initfs.img");
 
-    if let (Some(slot), Some(path)) = (boot_slot, system_manifest_path) {
-        match system_image::verify(system_table.boot_services(), image_handle, slot, path,
-            kernel_path, meta_path, initfs_path) {
+    if let Some(slot) = boot_slot {
+        match system_image::verify(system_table.boot_services(), image_handle, slot) {
             Ok(build) => {
                 println!("System {:?} boot chain signature verified (build {})", slot, build);
                 match anti_rollback::enforce(system_table.runtime_services(), build, stable_boot) {
@@ -993,7 +1081,10 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     }
 
     // カーネルをロード
-    let kernel_entry_addrs = {
+    let kernel_entry_addrs = if let Some(slot) = boot_slot {
+        let bt = system_table.boot_services();
+        unsafe { load_kernel_slot(bt, image_handle, slot) }
+    } else {
         let bt = system_table.boot_services();
         unsafe { load_kernel(bt, image_handle, kernel_path, meta_path, !ab_layout) }
     };
@@ -1006,7 +1097,12 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     };
 
     // initfsをESPから読み込む
-    let (initfs_addr, initfs_size) = {
+    let (initfs_addr, initfs_size) = if let Some(slot) = boot_slot {
+        match unsafe { load_initfs_slot(system_table.boot_services(), image_handle, slot) } {
+            Some(value) => value,
+            None => (0, 0),
+        }
+    } else {
         let bt = system_table.boot_services();
         unsafe { load_initfs(bt, image_handle, initfs_path, !ab_layout) }
     };

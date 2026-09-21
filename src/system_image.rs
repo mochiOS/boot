@@ -1,14 +1,12 @@
 use mochios_boot_selection::Slot;
-use mochios_system_image::{Architecture, ArtifactDigests, Manifest, MANIFEST_LEN};
+use mochios_system_image::{Architecture, ArtifactDigests, Manifest};
 use sha2::{Digest, Sha256};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::block::BlockIO;
-use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
-use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::media::partition::{GptPartitionType, PartitionInfo};
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
-use uefi::{guid, CStr16, Handle};
+use uefi::{guid, Handle};
 
 const SYSTEM_TYPE: GptPartitionType = GptPartitionType(guid!("6d6f6368-694f-5300-8000-6d5061727401"));
 const RELEASE_KEY: [u8; 32] = [
@@ -26,9 +24,10 @@ const DEVELOPMENT_KEY: [u8; 32] = [
 ];
 const CHUNK_BYTES: usize = 64 * 1024;
 
-pub fn verify(bt: &BootServices, image_handle: Handle, slot: Slot, path: &CStr16,
-    kernel_path: &CStr16, meta_path: &CStr16, initfs_path: &CStr16) -> Result<u64, &'static str> {
-    let manifest = read_manifest(bt, image_handle, path)?;
+pub fn verify(bt: &BootServices, image_handle: Handle, slot: Slot) -> Result<u64, &'static str> {
+    let boot = crate::slot_image::open(bt, image_handle, slot)?;
+    let manifest_bytes = crate::slot_image::read_vec(bt, boot.handle, boot.header.manifest)?;
+    let manifest = Manifest::decode(&manifest_bytes).map_err(|_| "System manifest is malformed")?;
     let loaded = bt.open_protocol_exclusive::<LoadedImage>(image_handle).map_err(|_| "loaded image unavailable")?;
     let esp = loaded.device().ok_or("boot ESP unavailable")?;
     drop(loaded);
@@ -79,48 +78,17 @@ pub fn verify(bt: &BootServices, image_handle: Handle, slot: Slot, path: &CStr16
     let keys = &[RELEASE_KEY][..];
     let digests = ArtifactDigests {
         system: digest.finalize().into(),
-        kernel: hash_esp_file(bt, image_handle, kernel_path)?,
-        kernel_meta: hash_esp_file(bt, image_handle, meta_path)?,
-        initfs: hash_esp_file(bt, image_handle, initfs_path)?,
+        kernel: hash_slot_region(bt, boot.handle, boot.header.kernel)?,
+        kernel_meta: hash_slot_region(bt, boot.handle, boot.header.kernel_meta)?,
+        initfs: hash_slot_region(bt, boot.handle, boot.header.initfs)?,
     };
     manifest.verify(&digests, keys).map_err(|_| "slot signature verification failed")?;
     Ok(manifest.build())
 }
 
-fn hash_esp_file(bt: &BootServices, image_handle: Handle, path: &CStr16) -> Result<[u8; 32], &'static str> {
-    let loaded = bt.open_protocol_exclusive::<LoadedImage>(image_handle).map_err(|_| "loaded image unavailable")?;
-    let device = loaded.device().ok_or("boot ESP unavailable")?;
-    drop(loaded);
-    let mut fs = bt.open_protocol_exclusive::<SimpleFileSystem>(device).map_err(|_| "boot ESP filesystem unavailable")?;
-    let mut root = fs.open_volume().map_err(|_| "boot ESP volume unavailable")?;
-    let file = root.open(path, FileMode::Read, FileAttribute::empty()).map_err(|_| "signed slot artifact unavailable")?;
-    let mut file = match file.into_type().map_err(|_| "signed slot artifact unreadable")? {
-        FileType::Regular(file) => file,
-        _ => return Err("signed slot artifact is not a file"),
-    };
+fn hash_slot_region(bt: &BootServices, handle: Handle, region: mochios_system_image::SlotRegion) -> Result<[u8; 32], &'static str> {
     let mut digest = Sha256::new();
-    let mut buffer = [0u8; 8192];
-    loop {
-        let count = file.read(&mut buffer).map_err(|_| "signed slot artifact read failed")?;
-        if count == 0 { break; }
-        digest.update(&buffer[..count]);
-    }
+    let bytes = crate::slot_image::read_vec(bt, handle, region)?;
+    digest.update(&bytes);
     Ok(digest.finalize().into())
-}
-
-fn read_manifest(bt: &BootServices, image_handle: Handle, path: &CStr16) -> Result<Manifest, &'static str> {
-    let loaded = bt.open_protocol_exclusive::<LoadedImage>(image_handle).map_err(|_| "loaded image unavailable")?;
-    let device = loaded.device().ok_or("boot ESP unavailable")?;
-    drop(loaded);
-    let mut fs = bt.open_protocol_exclusive::<SimpleFileSystem>(device).map_err(|_| "boot ESP filesystem unavailable")?;
-    let mut root = fs.open_volume().map_err(|_| "boot ESP volume unavailable")?;
-    let file = root.open(path, FileMode::Read, FileAttribute::empty()).map_err(|_| "System manifest unavailable")?;
-    let mut file = match file.into_type().map_err(|_| "System manifest unreadable")? { FileType::Regular(file) => file, _ => return Err("System manifest is not a file") };
-    let mut bytes = [0u8; MANIFEST_LEN];
-    let mut read = 0;
-    while read < bytes.len() { let count = file.read(&mut bytes[read..]).map_err(|_| "System manifest read failed")?; if count == 0 { break; } read += count; }
-    if read != bytes.len() { return Err("System manifest is truncated"); }
-    let mut extra = [0u8; 1];
-    if file.read(&mut extra).map_err(|_| "System manifest read failed")? != 0 { return Err("System manifest has trailing bytes"); }
-    Manifest::decode(&bytes).map_err(|_| "System manifest is malformed")
 }
