@@ -7,6 +7,7 @@ mod console;
 mod panic;
 mod boot_state;
 mod system_image;
+mod anti_rollback;
 #[cfg(feature = "require-secure-boot")]
 mod secure_boot;
 
@@ -927,19 +928,19 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         Err(error) => { println!("boot rejected: {}", error); return Status::SECURITY_VIOLATION; }
     }
 
-    let boot_slot = match boot_state::probe(system_table.boot_services(), image_handle) {
-        boot_state::Probe::Legacy => None,
+    let (boot_slot, stable_boot) = match boot_state::probe(system_table.boot_services(), image_handle) {
+        boot_state::Probe::Legacy => (None, false),
         boot_state::Probe::Stable(slot) => {
             println!("A/B boot state found; booting system {:?}", slot);
-            Some(slot)
+            (Some(slot), true)
         }
         boot_state::Probe::Trial { slot, attempts_remaining } => {
             println!("A/B trial boot: system {:?} attempts remaining={}", slot, attempts_remaining);
-            Some(slot)
+            (Some(slot), false)
         }
         boot_state::Probe::WriteFailedFallback(slot) => {
             println!("A/B boot-state write failed; booting stable system {:?}", slot);
-            Some(slot)
+            (Some(slot), true)
         }
         boot_state::Probe::Invalid => {
             println!("A/B boot state cannot be safely used by this loader");
@@ -979,7 +980,14 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     if let (Some(slot), Some(path)) = (boot_slot, system_manifest_path) {
         match system_image::verify(system_table.boot_services(), image_handle, slot, path,
             kernel_path, meta_path, initfs_path) {
-            Ok(build) => println!("System {:?} boot chain signature verified (build {})", slot, build),
+            Ok(build) => {
+                println!("System {:?} boot chain signature verified (build {})", slot, build);
+                match anti_rollback::enforce(system_table.runtime_services(), build, stable_boot) {
+                    Ok(decision) => println!("rollback floor={}{}", decision.floor,
+                        if decision.advanced { " advanced" } else { "" }),
+                    Err(error) => { println!("rollback rejected: {}", error); return Status::SECURITY_VIOLATION; }
+                }
+            }
             Err(error) => { println!("System {:?} rejected: {}", slot, error); return Status::SECURITY_VIOLATION; }
         }
     }
