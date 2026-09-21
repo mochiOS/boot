@@ -58,7 +58,7 @@ impl RecordIo for UefiRecords<'_> {
 
 /// Compare the physical-device path prefix before the partition's HD node.
 /// A similarly named state partition on a different attached disk is ignored.
-fn same_disk(left: &DevicePath, right: &DevicePath) -> bool {
+pub(crate) fn same_disk(left: &DevicePath, right: &DevicePath) -> bool {
     let mut left_nodes = left.node_iter();
     let mut right_nodes = right.node_iter();
     let mut parent_nodes = 0;

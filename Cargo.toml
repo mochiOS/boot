@@ -6,7 +6,7 @@ authors = ["tas0dev"]
 default-run = "boot"
 
 [workspace]
-members = [".", "crates/mdriver-protocol", "crates/boot-selection"]
+members = [".", "crates/mdriver-protocol", "crates/boot-selection", "crates/system-image"]
 
 [[bin]]
 name = "boot"
@@ -73,6 +73,7 @@ domain-probes = []
 kcfi = []
 cet-ibt = []
 cet-shadow-stack = []
+development-system-key = []
 
 [dependencies]
 uefi = { version = "0.30", features = ["alloc", "logger", "global_allocator"], optional = true }
@@ -84,6 +85,7 @@ mnu-abi = { git = "https://github.com/mochiOS/mnu", package = "mnu-abi" }
 mnu = { git = "https://github.com/mochiOS/mnu", default-features = false, optional = true }
 mochios-mdriver-protocol = { path = "crates/mdriver-protocol" }
 mochios-boot-selection = { path = "crates/boot-selection" }
+mochios-system-image = { path = "crates/system-image" }
 
 [profile.dev]
 panic = "abort"

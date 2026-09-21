@@ -6,6 +6,7 @@ extern crate alloc;
 mod console;
 mod panic;
 mod boot_state;
+mod system_image;
 
 use core::ptr::addr_of_mut;
 use mnu_abi::boot::{
@@ -946,23 +947,33 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     if ab_layout {
         println!("A/B boot ESP identity: {}", if boot_esp_guid.is_some() { "available" } else { "unavailable" });
     }
-    let (kernel_path, meta_path, initfs_path) = match boot_slot {
+    let (kernel_path, meta_path, initfs_path, system_manifest_path) = match boot_slot {
         Some(mochios_boot_selection::Slot::A) => (
             cstr16!(r"\slots\A\kernel.elf"),
             cstr16!(r"\slots\A\kernel.meta"),
             cstr16!(r"\slots\A\initfs.img"),
+            Some(cstr16!(r"\slots\A\system.manifest")),
         ),
         Some(mochios_boot_selection::Slot::B) => (
             cstr16!(r"\slots\B\kernel.elf"),
             cstr16!(r"\slots\B\kernel.meta"),
             cstr16!(r"\slots\B\initfs.img"),
+            Some(cstr16!(r"\slots\B\system.manifest")),
         ),
         None => (
             cstr16!(r"\system\kernel.elf"),
             cstr16!(r"\system\kernel.meta"),
             cstr16!(r"\system\initfs.img"),
+            None,
         ),
     };
+
+    if let (Some(slot), Some(path)) = (boot_slot, system_manifest_path) {
+        match system_image::verify(system_table.boot_services(), image_handle, slot, path) {
+            Ok(()) => println!("System {:?} signature verified", slot),
+            Err(error) => { println!("System {:?} rejected: {}", slot, error); return Status::SECURITY_VIOLATION; }
+        }
+    }
 
     // カーネルをロード
     let kernel_entry_addrs = {
