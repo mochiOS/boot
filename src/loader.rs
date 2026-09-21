@@ -969,8 +969,9 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     };
 
     if let (Some(slot), Some(path)) = (boot_slot, system_manifest_path) {
-        match system_image::verify(system_table.boot_services(), image_handle, slot, path) {
-            Ok(()) => println!("System {:?} signature verified", slot),
+        match system_image::verify(system_table.boot_services(), image_handle, slot, path,
+            kernel_path, meta_path, initfs_path) {
+            Ok(build) => println!("System {:?} boot chain signature verified (build {})", slot, build),
             Err(error) => { println!("System {:?} rejected: {}", slot, error); return Status::SECURITY_VIOLATION; }
         }
     }
