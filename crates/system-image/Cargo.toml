@@ -16,3 +16,8 @@ sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 name = "system-image-sign"
 path = "src/bin/sign.rs"
 required-features = ["std"]
+
+[[bin]]
+name = "system-slot-image"
+path = "src/bin/slot.rs"
+required-features = ["std"]

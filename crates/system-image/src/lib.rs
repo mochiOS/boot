@@ -5,8 +5,11 @@ use sha2::{Digest, Sha256};
 
 pub const MANIFEST_LEN: usize = 292;
 pub const SIGNED_HEADER_LEN: usize = 228;
+pub const SLOT_HEADER_LEN: usize = 4096;
 const MAGIC: &[u8; 8] = b"MOSYSIG\0";
+const SLOT_MAGIC: &[u8; 8] = b"MOSLOT\0\0";
 const FORMAT_VERSION: u16 = 2;
+const SLOT_FORMAT_VERSION: u16 = 1;
 const CONTEXT: &[u8] = b"mochios-system-slot-v2\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +17,118 @@ pub enum Architecture { X86_64 = 1, Aarch64 = 2 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error { InvalidFormat, UnsupportedVersion, UnknownKey, InvalidSignature, DigestMismatch }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SlotRegion {
+    pub offset: u64,
+    pub length: u64,
+}
+
+/// Canonical layout of one independently replaceable boot slot partition.
+///
+/// The header is intentionally not a general container directory. Regions are
+/// required to appear in this exact order at 4 KiB boundaries, so alternate
+/// byte interpretations cannot be introduced without changing the format.
+/// Their contents and the System partition are authenticated by `Manifest`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SlotHeader {
+    pub architecture: Architecture,
+    pub image_size: u64,
+    pub manifest: SlotRegion,
+    pub kernel: SlotRegion,
+    pub kernel_meta: SlotRegion,
+    pub initfs: SlotRegion,
+}
+
+impl SlotHeader {
+    pub fn create(
+        architecture: Architecture,
+        image_size: u64,
+        kernel_len: u64,
+        kernel_meta_len: u64,
+        initfs_len: u64,
+    ) -> Result<([u8; SLOT_HEADER_LEN], Self), Error> {
+        if image_size == 0 || image_size % 4096 != 0
+            || kernel_len == 0 || kernel_meta_len == 0 || initfs_len == 0
+        {
+            return Err(Error::InvalidFormat);
+        }
+        let manifest = SlotRegion { offset: SLOT_HEADER_LEN as u64, length: MANIFEST_LEN as u64 };
+        let kernel = next_region(manifest, kernel_len)?;
+        let kernel_meta = next_region(kernel, kernel_meta_len)?;
+        let initfs = next_region(kernel_meta, initfs_len)?;
+        if initfs.offset.checked_add(initfs.length).is_none_or(|end| end > image_size) {
+            return Err(Error::InvalidFormat);
+        }
+        let header = Self { architecture, image_size, manifest, kernel, kernel_meta, initfs };
+        let mut bytes = [0u8; SLOT_HEADER_LEN];
+        bytes[..8].copy_from_slice(SLOT_MAGIC);
+        bytes[8..10].copy_from_slice(&SLOT_FORMAT_VERSION.to_le_bytes());
+        bytes[10..12].copy_from_slice(&(SLOT_HEADER_LEN as u16).to_le_bytes());
+        bytes[12] = architecture as u8;
+        bytes[16..24].copy_from_slice(&image_size.to_le_bytes());
+        put_region(&mut bytes, 24, manifest);
+        put_region(&mut bytes, 40, kernel);
+        put_region(&mut bytes, 56, kernel_meta);
+        put_region(&mut bytes, 72, initfs);
+        Ok((bytes, header))
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let bytes: &[u8; SLOT_HEADER_LEN] = bytes.try_into().map_err(|_| Error::InvalidFormat)?;
+        if &bytes[..8] != SLOT_MAGIC { return Err(Error::InvalidFormat); }
+        if u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != SLOT_FORMAT_VERSION {
+            return Err(Error::UnsupportedVersion);
+        }
+        if u16::from_le_bytes(bytes[10..12].try_into().unwrap()) as usize != SLOT_HEADER_LEN
+            || !matches!(bytes[12], 1 | 2)
+            || bytes[13..16].iter().any(|byte| *byte != 0)
+            || bytes[88..].iter().any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidFormat);
+        }
+        let architecture = if bytes[12] == 1 { Architecture::X86_64 } else { Architecture::Aarch64 };
+        let image_size = get_u64(bytes, 16);
+        let manifest = get_region(bytes, 24);
+        let kernel = get_region(bytes, 40);
+        let kernel_meta = get_region(bytes, 56);
+        let initfs = get_region(bytes, 72);
+        let expected_manifest = SlotRegion { offset: SLOT_HEADER_LEN as u64, length: MANIFEST_LEN as u64 };
+        if image_size == 0 || image_size % 4096 != 0 || manifest != expected_manifest
+            || kernel != next_region(manifest, kernel.length)?
+            || kernel_meta != next_region(kernel, kernel_meta.length)?
+            || initfs != next_region(kernel_meta, initfs.length)?
+            || kernel.length == 0 || kernel_meta.length == 0 || initfs.length == 0
+            || initfs.offset.checked_add(initfs.length).is_none_or(|end| end > image_size)
+        {
+            return Err(Error::InvalidFormat);
+        }
+        Ok(Self { architecture, image_size, manifest, kernel, kernel_meta, initfs })
+    }
+}
+
+fn align_4096(value: u64) -> Result<u64, Error> {
+    value.checked_add(4095).map(|value| value & !4095).ok_or(Error::InvalidFormat)
+}
+
+fn next_region(previous: SlotRegion, length: u64) -> Result<SlotRegion, Error> {
+    if length == 0 { return Err(Error::InvalidFormat); }
+    let end = previous.offset.checked_add(previous.length).ok_or(Error::InvalidFormat)?;
+    Ok(SlotRegion { offset: align_4096(end)?, length })
+}
+
+fn put_region(bytes: &mut [u8], offset: usize, region: SlotRegion) {
+    bytes[offset..offset + 8].copy_from_slice(&region.offset.to_le_bytes());
+    bytes[offset + 8..offset + 16].copy_from_slice(&region.length.to_le_bytes());
+}
+
+fn get_region(bytes: &[u8], offset: usize) -> SlotRegion {
+    SlotRegion { offset: get_u64(bytes, offset), length: get_u64(bytes, offset + 8) }
+}
+
+fn get_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArtifactDigests {
@@ -145,5 +260,50 @@ mod tests {
         bytes[8..10].copy_from_slice(&3u16.to_le_bytes());
         assert_eq!(Manifest::decode(&bytes), Err(Error::UnsupportedVersion));
         assert_eq!(Manifest::decode(&bytes[..bytes.len() - 1]), Err(Error::InvalidFormat));
+    }
+
+    #[test]
+    fn boot_slot_layout_is_canonical_and_bounded() {
+        let (bytes, expected) = SlotHeader::create(
+            Architecture::X86_64,
+            128 * 1024 * 1024,
+            789_640,
+            64,
+            100_663_296,
+        ).unwrap();
+        assert_eq!(SlotHeader::decode(&bytes), Ok(expected));
+        assert_eq!(expected.manifest.offset, 4096);
+        assert_eq!(expected.kernel.offset, 8192);
+        assert_eq!(expected.kernel.offset % 4096, 0);
+        assert_eq!(expected.kernel_meta.offset % 4096, 0);
+        assert_eq!(expected.initfs.offset % 4096, 0);
+    }
+
+    #[test]
+    fn boot_slot_rejects_noncanonical_unknown_and_oversized_layouts() {
+        let (mut bytes, _) = SlotHeader::create(
+            Architecture::X86_64,
+            128 * 1024 * 1024,
+            4096,
+            64,
+            4096,
+        ).unwrap();
+        bytes[40] ^= 1;
+        assert_eq!(SlotHeader::decode(&bytes), Err(Error::InvalidFormat));
+
+        let (mut bytes, _) = SlotHeader::create(
+            Architecture::X86_64,
+            128 * 1024 * 1024,
+            4096,
+            64,
+            4096,
+        ).unwrap();
+        bytes[8..10].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(SlotHeader::decode(&bytes), Err(Error::UnsupportedVersion));
+
+        assert_eq!(
+            SlotHeader::create(Architecture::X86_64, 8192, 4096, 64, 4096),
+            Err(Error::InvalidFormat),
+        );
     }
 }
