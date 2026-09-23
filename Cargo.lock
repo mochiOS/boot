@@ -218,7 +218,6 @@ dependencies = [
 [[package]]
 name = "mnu-abi"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#291cbd9b709d1222be22fbffa0881399c246ec67"
 
 [[package]]
 name = "mnu-csprng"
