@@ -434,7 +434,9 @@ unsafe fn populate_cpu_info(bt: &BootServices) {
 }
 
 #[inline]
-fn tick_booting_gif() {}
+fn tick_booting_gif() {
+    boot_ui::advance_loading();
+}
 
 /// `\system\initfs.img` を読み込んで物理アドレスとサイズを返す
 unsafe fn load_initfs(

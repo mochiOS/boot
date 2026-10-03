@@ -124,15 +124,7 @@ impl Drop for LoadingAnimation<'_> {
 
 pub fn start_loading_animation(boot_services: &BootServices) -> Option<LoadingAnimation<'_>> {
     unsafe extern "efiapi" fn tick(_event: Event, _context: Option<NonNull<c_void>>) {
-        let phase = PHASE.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-        let _ = with_surface(|surface| {
-            let center = spinner_center(surface);
-            surface.fill_rect(
-                Rect::new(center.x - 22, center.y - 22, 44, 44),
-                Color::BLACK,
-            );
-            draw_spinner(surface, phase);
-        });
+        advance_loading();
     }
     let event = unsafe {
         boot_services.create_event(
@@ -154,6 +146,20 @@ pub fn start_loading_animation(boot_services: &BootServices) -> Option<LoadingAn
         boot_services,
         event: Some(event),
     })
+}
+
+/// Advances the loading indicator when firmware is busy in a synchronous
+/// operation and cannot dispatch timer events.
+pub fn advance_loading() {
+    let phase = PHASE.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let _ = with_surface(|surface| {
+        let center = spinner_center(surface);
+        surface.fill_rect(
+            Rect::new(center.x - 12, center.y - 12, 24, 24),
+            Color::BLACK,
+        );
+        draw_spinner(surface, phase);
+    });
 }
 
 fn draw_spinner(surface: &mut Surface<'_>, phase: u8) {
