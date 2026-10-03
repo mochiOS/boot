@@ -59,7 +59,7 @@ pub fn show_loading() {
         ) else {
             return;
         };
-        let longest = (surface.width() / 5).min(surface.height() / 5).max(1);
+        let longest = (surface.width() / 8).min(surface.height() / 8).max(1);
         let source_longest = BOOT_LOGO_WIDTH.max(BOOT_LOGO_HEIGHT);
         let width =
             (u64::from(BOOT_LOGO_WIDTH) * u64::from(longest) / u64::from(source_longest)) as u32;
@@ -160,7 +160,7 @@ fn draw_spinner(surface: &mut Surface<'_>, phase: u8) {
     surface.draw_arc_spinner(
         spinner_center(surface),
         phase,
-        ArcSpinnerStyle::new(10, 2, Color::rgba(244, 246, 250, 230)),
+        ArcSpinnerStyle::new(8, 2, Color::rgb(244, 246, 250)),
     );
 }
 
