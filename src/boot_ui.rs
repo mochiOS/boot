@@ -1,4 +1,4 @@
-use bootui::{Color, Image, PixelFormat, Point, Rect, SpinnerStyle, Surface};
+use bootui::{ArcSpinnerStyle, Color, Image, PixelFormat, Point, Rect, Surface};
 use core::ffi::c_void;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -59,7 +59,7 @@ pub fn show_loading() {
         ) else {
             return;
         };
-        let longest = (surface.width() / 3).min(surface.height() / 3).max(1);
+        let longest = (surface.width() / 5).min(surface.height() / 5).max(1);
         let source_longest = BOOT_LOGO_WIDTH.max(BOOT_LOGO_HEIGHT);
         let width =
             (u64::from(BOOT_LOGO_WIDTH) * u64::from(longest) / u64::from(source_longest)) as u32;
@@ -157,10 +157,10 @@ pub fn start_loading_animation(boot_services: &BootServices) -> Option<LoadingAn
 }
 
 fn draw_spinner(surface: &mut Surface<'_>, phase: u8) {
-    surface.draw_spinner(
+    surface.draw_arc_spinner(
         spinner_center(surface),
         phase,
-        SpinnerStyle::new(10, 2, Color::rgba(244, 246, 250, 230)),
+        ArcSpinnerStyle::new(10, 2, Color::rgba(244, 246, 250, 230)),
     );
 }
 
