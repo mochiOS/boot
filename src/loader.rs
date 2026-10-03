@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod console;
+mod boot_ui;
 mod panic;
 mod boot_state;
 mod system_image;
@@ -21,7 +22,7 @@ use mnu_abi::boot::{
     MAX_BOOT_MEMORY_REGIONS, MAX_CPU_IDS,
 };
 use uefi::prelude::*;
-use uefi::proto::console::gop::GraphicsOutput;
+use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::file::{File, FileAttribute, FileInfo, FileMode, FileType, RegularFile};
 use uefi::proto::media::fs::SimpleFileSystem;
@@ -37,18 +38,8 @@ macro_rules! sprint {
     }};
 }
 
-macro_rules! vga_print {
-    ($($arg:tt)*) => {{
-        let _ = core::fmt::write(
-            &mut *console::CONSOLE.lock(),
-            format_args!($($arg)*),
-        );
-    }};
-}
-
 macro_rules! println {
     ($($arg:tt)*) => {{
-        vga_print!("[mBoot] {}\n", format_args!($($arg)*));
         sprint!("[mBoot] {}\n", format_args!($($arg)*));
     }};
 }
@@ -994,7 +985,7 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     }
 
     // GOP フレームバッファを最初に取得してコンソールを初期化
-    let (_fb_ptr, fb_addr, fb_size, screen_w, screen_h, stride) = {
+    let (_fb_ptr, fb_addr, fb_size, screen_w, screen_h, stride, pixel_format) = {
         let gop_handle = match system_table
             .boot_services()
             .get_handle_for_protocol::<GraphicsOutput>()
@@ -1015,8 +1006,13 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         let fb_sz = fb.size();
         let (w, h) = mode_info.resolution();
         let st = mode_info.stride();
+        let pixel_format = match mode_info.pixel_format() {
+            PixelFormat::Rgb => bootui::PixelFormat::Rgb,
+            PixelFormat::Bgr => bootui::PixelFormat::Bgr,
+            PixelFormat::Bitmask | PixelFormat::BltOnly => return Status::UNSUPPORTED,
+        };
         console::CONSOLE.lock().init(fb_ptr, w, h, st);
-        (fb_ptr, fb_ptr as u64, fb_sz, w, h, st)
+        (fb_ptr, fb_ptr as u64, fb_sz, w, h, st, pixel_format)
     };
 
     *console::SERIAL.lock() = Some(console::SerialConsole::new(0x3F8));
@@ -1024,6 +1020,19 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     if let Some(serial) = console::SERIAL.lock().as_mut() {
         serial.init();
     }
+
+    if !boot_ui::initialize(
+        fb_addr as usize,
+        fb_size,
+        screen_w,
+        screen_h,
+        stride,
+        pixel_format,
+    ) {
+        return Status::UNSUPPORTED;
+    }
+    boot_ui::show_loading();
+    let mut loading_animation = boot_ui::start_loading_animation(system_table.boot_services());
 
     println!("mochiOS bootloader");
     println!("Framebuffer: {}x{} stride={}", screen_w, screen_h, stride);
@@ -1148,6 +1157,10 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     }
 
     // Boot servicesを終了してメモリマップを取得
+    if let Some(animation) = loading_animation.take() {
+        animation.stop();
+    }
+    drop(loading_animation);
     let (_system_table, memory_map_iter) =
         unsafe { system_table.exit_boot_services(UefiMemType::LOADER_DATA) };
 

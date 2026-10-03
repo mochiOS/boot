@@ -9,9 +9,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
         }
     }
 
-    if let Some(mut console) = crate::console::CONSOLE.try_lock() {
-        let _ = writeln!(console, "[mBoot] panic: {info}");
-    }
+    crate::boot_ui::show_error();
 
     x86_64::instructions::interrupts::disable();
     loop {
