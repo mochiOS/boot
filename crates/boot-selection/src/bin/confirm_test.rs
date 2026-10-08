@@ -28,26 +28,34 @@ impl RecordIo for FileRecords {
         self.0.write_all_at(bytes, COPY_OFFSETS[index])
     }
 
-    fn sync(&mut self) -> io::Result<()> { self.0.sync_all() }
+    fn sync(&mut self) -> io::Result<()> {
+        self.0.sync_all()
+    }
 }
 
 fn run(path: &Path) -> io::Result<()> {
     let file = OpenOptions::new().read(true).write(true).open(path)?;
     if !file.metadata()?.is_file() || file.metadata()?.len() != PARTITION_SIZE {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            "expected an isolated 1 MiB boot-state partition image"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected an isolated 1 MiB boot-state partition image",
+        ));
     }
     let mut records = FileRecords(file);
     let selected = storage::load(&mut records)
         .map_err(|error| io::Error::other(format!("boot-state load failed: {error:?}")))?;
     if selected.record.pending() != Some(Slot::B) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            "no pending system B trial to confirm"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no pending system B trial to confirm",
+        ));
     }
     let confirmed = storage::confirm(&mut records, Slot::B)
         .map_err(|error| io::Error::other(format!("boot-state confirmation failed: {error:?}")))?;
     if confirmed.active() != Slot::B || confirmed.pending().is_some() {
-        return Err(io::Error::other("boot-state confirmation did not select stable B"));
+        return Err(io::Error::other(
+            "boot-state confirmation did not select stable B",
+        ));
     }
     Ok(())
 }
@@ -56,12 +64,16 @@ fn main() -> io::Result<()> {
     let mut args = env::args_os();
     let _program = args.next();
     let Some(path) = args.next() else {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            "usage: boot-selection-confirm-test <isolated-state-image>"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "usage: boot-selection-confirm-test <isolated-state-image>",
+        ));
     };
     if args.next().is_some() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            "usage: boot-selection-confirm-test <isolated-state-image>"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "usage: boot-selection-confirm-test <isolated-state-image>",
+        ));
     }
     run(Path::new(&path))
 }

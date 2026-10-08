@@ -17,17 +17,16 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_CONTROL_INSTALL_PARTITION, MDRIVER_CONTROL_NEGOTIATE, MDRIVER_CONTROL_OPEN_DEVICE,
     MDRIVER_CONTROL_OPEN_DISPLAY, MDRIVER_CONTROL_OPEN_PARTITION, MDRIVER_CONTROL_PING,
     MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_PRESENT_GPU_SCENE,
-    MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER,
-    MDRIVER_CONTROL_START_SESSION, MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK,
-    MDRIVER_CONTROL_VERSION, MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH, MDRIVER_DEVICE_FEATURE_BLOCK_READ,
+    MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER, MDRIVER_CONTROL_START_SESSION,
+    MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK, MDRIVER_CONTROL_VERSION,
+    MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH, MDRIVER_DEVICE_FEATURE_BLOCK_READ,
     MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
     MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE, MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE,
-    MDRIVER_DEVICE_FEATURE_DISPLAY_TILE,
-    MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY, MDRIVER_DISPLAY_BUFFER_PAGE,
-    MDRIVER_DISPLAY_BULK_FIRST_PAGE, MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
-    MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_MAX_TRANSFER,
+    MDRIVER_DEVICE_FEATURE_DISPLAY_TILE, MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY,
+    MDRIVER_DISPLAY_BUFFER_PAGE, MDRIVER_DISPLAY_BULK_FIRST_PAGE,
+    MDRIVER_DISPLAY_BULK_MAX_TRANSFER, MDRIVER_DISPLAY_BULK_PAGE_COUNT,
     MDRIVER_DISPLAY_GPU_SCENE_COMMIT_WIDTH, MDRIVER_DISPLAY_GPU_SCENE_COMMIT_X,
-    MDRIVER_DISPLAY_OPEN_SHARED_SURFACE, MDRIVER_DISPLAY_PIXEL_BYTES,
+    MDRIVER_DISPLAY_MAX_TRANSFER, MDRIVER_DISPLAY_OPEN_SHARED_SURFACE, MDRIVER_DISPLAY_PIXEL_BYTES,
     MDRIVER_DISPLAY_SURFACE_FIRST_PAGE, MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT,
     MDRIVER_STORAGE_QUERY_PARTITION_GUIDS,
 };
@@ -200,7 +199,10 @@ impl Drop for ClientLease<'_> {
                 let mut slot = self.store.0.lock();
                 slot.value = self.value.take();
                 slot.borrowed = false;
-                core::mem::replace(&mut slot.waiters, [None; mnu::task::ThreadQueue::MAX_THREADS])
+                core::mem::replace(
+                    &mut slot.waiters,
+                    [None; mnu::task::ThreadQueue::MAX_THREADS],
+                )
             };
             for tid in waiters.into_iter().flatten() {
                 mnu::task::wake_thread(tid);
@@ -824,8 +826,7 @@ fn ensure_display(client: &mut Client) -> Result<DisplayState, Error> {
     }
     let (grant_start, grant_size) =
         hypervisor_guest::grant_window().ok_or(Error::MissingGrantWindow)?;
-    let bulk_pages_end =
-        MDRIVER_DISPLAY_BULK_FIRST_PAGE + MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64;
+    let bulk_pages_end = MDRIVER_DISPLAY_BULK_FIRST_PAGE + MDRIVER_DISPLAY_BULK_PAGE_COUNT as u64;
     let surface_page_count = grant_size
         .checked_div(4096)
         .and_then(|pages| pages.checked_sub(MDRIVER_DISPLAY_SURFACE_FIRST_PAGE))
@@ -1226,22 +1227,28 @@ fn platform_device_control(
 ) -> Result<mnu::platform::DeviceControlResponse, mnu::platform::PlatformError> {
     (match authority {
         "device.storage" => storage_control(operation, device_id, arguments),
-        "device.input" if operation == mochios_mdriver_protocol::control::MDRIVER_CONTROL_READ_POINTER
-            && device_id == 0 && arguments == [0; 4] => {
+        "device.input"
+            if operation == mochios_mdriver_protocol::control::MDRIVER_CONTROL_READ_POINTER
+                && device_id == 0
+                && arguments == [0; 4] =>
+        {
             initialize_client().and_then(|()| {
                 let mut guard = CLIENT.lock();
                 let client = guard.as_mut().ok_or(Error::Device)?;
-                transact(client, MdriverControlRequest::new(operation, device_id, arguments))
+                transact(
+                    client,
+                    MdriverControlRequest::new(operation, device_id, arguments),
+                )
             })
         }
         _ => Err(Error::Protocol),
     })
-        .map(|response| mnu::platform::DeviceControlResponse {
-            status: response.status,
-            device_id: response.device_id,
-            values: response.values,
-        })
-        .map_err(platform_error)
+    .map(|response| mnu::platform::DeviceControlResponse {
+        status: response.status,
+        device_id: response.device_id,
+        values: response.values,
+    })
+    .map_err(platform_error)
 }
 
 pub static PLATFORM_OPS: mnu::platform::PlatformOps = mnu::platform::PlatformOps {

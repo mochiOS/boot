@@ -3,23 +3,22 @@
 
 extern crate alloc;
 
-mod console;
-mod boot_ui;
-mod panic;
-mod boot_state;
-mod system_image;
-mod slot_image;
 mod anti_rollback;
+mod boot_state;
+mod boot_ui;
+mod console;
+mod panic;
 #[cfg(feature = "require-secure-boot")]
 mod secure_boot;
+mod slot_image;
+mod system_image;
 
 use core::ptr::addr_of_mut;
 use mnu_abi::boot::{
-    BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_FRAMEBUFFER,
-    BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE, BOOT_FEATURE_SMP,
-    BOOT_FEATURE_BOOT_ESP_GUID, BOOT_FEATURE_SYSTEM_SLOT, BOOT_SYSTEM_SLOT_A, BOOT_SYSTEM_SLOT_B,
-    BOOT_SYSTEM_SLOT_LEGACY,
-    MAX_BOOT_MEMORY_REGIONS, MAX_CPU_IDS,
+    BootInfo, MemoryRegion, MemoryType, SmpHandoff, BOOT_FEATURE_BOOT_ESP_GUID,
+    BOOT_FEATURE_ENTROPY, BOOT_FEATURE_FRAMEBUFFER, BOOT_FEATURE_INITFS, BOOT_FEATURE_ROOTFS_IMAGE,
+    BOOT_FEATURE_SMP, BOOT_FEATURE_SYSTEM_SLOT, BOOT_SYSTEM_SLOT_A, BOOT_SYSTEM_SLOT_B,
+    BOOT_SYSTEM_SLOT_LEGACY, MAX_BOOT_MEMORY_REGIONS, MAX_CPU_IDS,
 };
 use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
@@ -305,7 +304,9 @@ unsafe fn find_elf_symbol_in_file(
 struct LoaderReadError;
 
 impl LoaderReadError {
-    const fn status(self) -> Status { Status::DEVICE_ERROR }
+    const fn status(self) -> Status {
+        Status::DEVICE_ERROR
+    }
 }
 
 trait LoaderReader {
@@ -331,7 +332,9 @@ struct SliceReader<'a> {
 impl LoaderReader for SliceReader<'_> {
     fn set_position(&mut self, position: u64) -> Result<(), LoaderReadError> {
         let position = usize::try_from(position).map_err(|_| LoaderReadError)?;
-        if position > self.bytes.len() { return Err(LoaderReadError); }
+        if position > self.bytes.len() {
+            return Err(LoaderReadError);
+        }
         self.position = position;
         Ok(())
     }
@@ -348,13 +351,20 @@ impl LoaderReader for SliceReader<'_> {
 fn kernel_meta_secondary_entry(bytes: &[u8]) -> Option<u64> {
     let text = core::str::from_utf8(bytes).ok()?;
     for line in text.lines() {
-        let Some(value) = line.strip_prefix("secondary_cpu_entry=0x") else { continue };
-        if let Ok(address) = u64::from_str_radix(value.trim(), 16) { return Some(address); }
+        let Some(value) = line.strip_prefix("secondary_cpu_entry=0x") else {
+            continue;
+        };
+        if let Ok(address) = u64::from_str_radix(value.trim(), 16) {
+            return Some(address);
+        }
     }
     None
 }
 
-unsafe fn read_kernel_meta_secondary_entry(root: &mut impl File, meta_path: &uefi::CStr16) -> Option<u64> {
+unsafe fn read_kernel_meta_secondary_entry(
+    root: &mut impl File,
+    meta_path: &uefi::CStr16,
+) -> Option<u64> {
     let fh = root
         .open(meta_path, FileMode::Read, FileAttribute::empty())
         .ok()?;
@@ -445,7 +455,6 @@ unsafe fn load_initfs(
     initfs_path: &uefi::CStr16,
     allow_fallback: bool,
 ) -> (u64, usize) {
-
     // LoadedImage デバイスを優先
     let handles: alloc::vec::Vec<Handle> =
         if let Ok(li) = bt.open_protocol_exclusive::<LoadedImage>(image_handle) {
@@ -453,12 +462,18 @@ unsafe fn load_initfs(
                 drop(li);
                 alloc::vec![dev]
             } else {
-                if allow_fallback { bt.find_handles::<SimpleFileSystem>().unwrap_or_default() }
-                else { alloc::vec::Vec::new() }
+                if allow_fallback {
+                    bt.find_handles::<SimpleFileSystem>().unwrap_or_default()
+                } else {
+                    alloc::vec::Vec::new()
+                }
             }
         } else {
-            if allow_fallback { bt.find_handles::<SimpleFileSystem>().unwrap_or_default() }
-            else { alloc::vec::Vec::new() }
+            if allow_fallback {
+                bt.find_handles::<SimpleFileSystem>().unwrap_or_default()
+            } else {
+                alloc::vec::Vec::new()
+            }
         };
 
     for handle in handles {
@@ -538,7 +553,6 @@ unsafe fn load_kernel(
     meta_path: &uefi::CStr16,
     allow_fallback: bool,
 ) -> Option<(u64, u64)> {
-
     // LoadedImage からブートローダー自身のデバイスハンドルを取得して優先的に試みる
     match bt.open_protocol_exclusive::<LoadedImage>(image_handle) {
         Err(e) => println!("LoadedImage open failed: {:?}", e.status()),
@@ -555,7 +569,9 @@ unsafe fn load_kernel(
         },
     }
 
-    if !allow_fallback { return None; }
+    if !allow_fallback {
+        return None;
+    }
     // 旧形式のみ: 全 SimpleFileSystem ハンドルをスキャンして kernel.elf を探す
     match bt.find_handles::<SimpleFileSystem>() {
         Err(e) => {
@@ -566,7 +582,8 @@ unsafe fn load_kernel(
             println!("SFS handle count: {}", sfs_handles.len());
             for handle in sfs_handles {
                 tick_booting_gif();
-                if let Some(entry) = try_load_from(bt, image_handle, handle, kernel_path, meta_path) {
+                if let Some(entry) = try_load_from(bt, image_handle, handle, kernel_path, meta_path)
+                {
                     return Some(entry);
                 }
             }
@@ -646,7 +663,6 @@ unsafe fn load_kernel_reader(
     _file_size: usize,
     secondary_meta: Option<u64>,
 ) -> Option<(u64, u64)> {
-
     // ELF ヘッダとプログラムヘッダを小さなスタックバッファで先読みし、
     // カーネルのロードアドレス範囲を確定してからページを先に確保する。
     // (フルバッファを AnyPages で先に確保すると 0x200000 に配置される場合があり、
@@ -944,20 +960,32 @@ unsafe fn load_kernel_slot(
 ) -> Option<(u64, u64)> {
     let opened = match slot_image::open(bt, image_handle, slot) {
         Ok(opened) => opened,
-        Err(error) => { println!("Boot {:?} unavailable: {}", slot, error); return None; }
+        Err(error) => {
+            println!("Boot {:?} unavailable: {}", slot, error);
+            return None;
+        }
     };
     let kernel = match slot_image::read_vec(bt, opened.handle, opened.header.kernel) {
         Ok(kernel) => kernel,
-        Err(error) => { println!("kernel.elf read failed: {}", error); return None; }
+        Err(error) => {
+            println!("kernel.elf read failed: {}", error);
+            return None;
+        }
     };
     let metadata = match slot_image::read_vec(bt, opened.handle, opened.header.kernel_meta) {
         Ok(metadata) => metadata,
-        Err(error) => { println!("kernel.meta read failed: {}", error); return None; }
+        Err(error) => {
+            println!("kernel.meta read failed: {}", error);
+            return None;
+        }
     };
     println!("kernel.elf size: {} bytes", kernel.len());
     let kernel_len = kernel.len();
     let secondary = kernel_meta_secondary_entry(&metadata);
-    let mut reader = SliceReader { bytes: &kernel, position: 0 };
+    let mut reader = SliceReader {
+        bytes: &kernel,
+        position: 0,
+    };
     load_kernel_reader(bt, &mut reader, kernel_len, secondary)
 }
 
@@ -969,9 +997,12 @@ unsafe fn load_initfs_slot(
     let opened = slot_image::open(bt, image_handle, slot).ok()?;
     let size = usize::try_from(opened.header.initfs.length).ok()?;
     let pages = size.checked_add(4095)? / 4096;
-    let address = bt.allocate_pages(AllocateType::AnyPages, UefiMemType::LOADER_DATA, pages).ok()?;
+    let address = bt
+        .allocate_pages(AllocateType::AnyPages, UefiMemType::LOADER_DATA, pages)
+        .ok()?;
     let destination = core::slice::from_raw_parts_mut(address as *mut u8, size);
-    if let Err(error) = slot_image::read_exact(bt, opened.handle, opened.header.initfs, destination) {
+    if let Err(error) = slot_image::read_exact(bt, opened.handle, opened.header.initfs, destination)
+    {
         println!("initfs read failed: {}", error);
         return None;
     }
@@ -1042,28 +1073,41 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     #[cfg(feature = "require-secure-boot")]
     match secure_boot::require_enabled(system_table.runtime_services()) {
         Ok(()) => println!("UEFI Secure Boot verified"),
-        Err(error) => { println!("boot rejected: {}", error); return Status::SECURITY_VIOLATION; }
+        Err(error) => {
+            println!("boot rejected: {}", error);
+            return Status::SECURITY_VIOLATION;
+        }
     }
 
-    let (boot_slot, stable_boot) = match boot_state::probe(system_table.boot_services(), image_handle) {
-        boot_state::Probe::Legacy => (None, false),
-        boot_state::Probe::Stable(slot) => {
-            println!("A/B boot state found; booting system {:?}", slot);
-            (Some(slot), true)
-        }
-        boot_state::Probe::Trial { slot, attempts_remaining } => {
-            println!("A/B trial boot: system {:?} attempts remaining={}", slot, attempts_remaining);
-            (Some(slot), false)
-        }
-        boot_state::Probe::WriteFailedFallback(slot) => {
-            println!("A/B boot-state write failed; booting stable system {:?}", slot);
-            (Some(slot), true)
-        }
-        boot_state::Probe::Invalid => {
-            println!("A/B boot state cannot be safely used by this loader");
-            return Status::UNSUPPORTED;
-        }
-    };
+    let (boot_slot, stable_boot) =
+        match boot_state::probe(system_table.boot_services(), image_handle) {
+            boot_state::Probe::Legacy => (None, false),
+            boot_state::Probe::Stable(slot) => {
+                println!("A/B boot state found; booting system {:?}", slot);
+                (Some(slot), true)
+            }
+            boot_state::Probe::Trial {
+                slot,
+                attempts_remaining,
+            } => {
+                println!(
+                    "A/B trial boot: system {:?} attempts remaining={}",
+                    slot, attempts_remaining
+                );
+                (Some(slot), false)
+            }
+            boot_state::Probe::WriteFailedFallback(slot) => {
+                println!(
+                    "A/B boot-state write failed; booting stable system {:?}",
+                    slot
+                );
+                (Some(slot), true)
+            }
+            boot_state::Probe::Invalid => {
+                println!("A/B boot state cannot be safely used by this loader");
+                return Status::UNSUPPORTED;
+            }
+        };
     let ab_layout = boot_slot.is_some();
     let boot_esp_guid = if ab_layout {
         boot_state::boot_esp_guid(system_table.boot_services(), image_handle)
@@ -1071,7 +1115,14 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         None
     };
     if ab_layout {
-        println!("A/B boot ESP identity: {}", if boot_esp_guid.is_some() { "available" } else { "unavailable" });
+        println!(
+            "A/B boot ESP identity: {}",
+            if boot_esp_guid.is_some() {
+                "available"
+            } else {
+                "unavailable"
+            }
+        );
     }
     let kernel_path = cstr16!(r"\system\kernel.elf");
     let meta_path = cstr16!(r"\system\kernel.meta");
@@ -1080,14 +1131,26 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
     if let Some(slot) = boot_slot {
         match system_image::verify(system_table.boot_services(), image_handle, slot) {
             Ok(build) => {
-                println!("System {:?} boot chain signature verified (build {})", slot, build);
+                println!(
+                    "System {:?} boot chain signature verified (build {})",
+                    slot, build
+                );
                 match anti_rollback::enforce(system_table.runtime_services(), build, stable_boot) {
-                    Ok(decision) => println!("rollback floor={}{}", decision.floor,
-                        if decision.advanced { " advanced" } else { "" }),
-                    Err(error) => { println!("rollback rejected: {}", error); return Status::SECURITY_VIOLATION; }
+                    Ok(decision) => println!(
+                        "rollback floor={}{}",
+                        decision.floor,
+                        if decision.advanced { " advanced" } else { "" }
+                    ),
+                    Err(error) => {
+                        println!("rollback rejected: {}", error);
+                        return Status::SECURITY_VIOLATION;
+                    }
                 }
             }
-            Err(error) => { println!("System {:?} rejected: {}", slot, error); return Status::SECURITY_VIOLATION; }
+            Err(error) => {
+                println!("System {:?} rejected: {}", slot, error);
+                return Status::SECURITY_VIOLATION;
+            }
         }
     }
 
@@ -1121,7 +1184,9 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         println!("A/B slot initfs is unavailable");
         return Status::NOT_FOUND;
     }
-    if let Some(slot) = boot_slot { println!("A/B boot assets: slot {:?}", slot); }
+    if let Some(slot) = boot_slot {
+        println!("A/B boot assets: slot {:?}", slot);
+    }
 
     let rootfs_addr = 0u64;
     let rootfs_size = 0usize;

@@ -1,7 +1,9 @@
 //! Crash-safe two-copy record protocol. The backend must place each copy in
 //! its own failure domain and make `sync` durable before returning.
 
-use crate::{BootDecision, BootRecord, RECORD_LEN, SelectedRecord, Slot, TransitionError, select_for_update};
+use crate::{
+    select_for_update, BootDecision, BootRecord, SelectedRecord, Slot, TransitionError, RECORD_LEN,
+};
 
 pub trait RecordIo {
     type Error;
@@ -35,7 +37,9 @@ fn write_and_verify<IO: RecordIo>(
     io.write_copy(index, &expected).map_err(StoreError::Io)?;
     io.sync().map_err(StoreError::Io)?;
     let actual = io.read_copy(index).map_err(StoreError::Io)?;
-    if actual != expected { return Err(StoreError::ReadBackMismatch); }
+    if actual != expected {
+        return Err(StoreError::ReadBackMismatch);
+    }
     Ok(())
 }
 
@@ -46,7 +50,9 @@ fn commit<IO: RecordIo>(
 ) -> Result<BootRecord, StoreError<IO::Error>> {
     write_and_verify(io, selected.write_copy, next)?;
     // Also catch a backend which accidentally overwrote the other copy.
-    if load(io)?.record != next { return Err(StoreError::ReadBackMismatch); }
+    if load(io)?.record != next {
+        return Err(StoreError::ReadBackMismatch);
+    }
     Ok(next)
 }
 
@@ -67,7 +73,10 @@ pub fn initialize_blank<IO: RecordIo>(io: &mut IO) -> Result<(), StoreError<IO::
 /// Caller must have verified and synced the inactive slot before this call.
 pub fn stage<IO: RecordIo>(io: &mut IO, target: Slot) -> Result<BootRecord, StoreError<IO::Error>> {
     let selected = load(io)?;
-    let next = selected.record.stage(target).map_err(StoreError::Transition)?;
+    let next = selected
+        .record
+        .stage(target)
+        .map_err(StoreError::Transition)?;
     commit(io, selected, next)
 }
 
@@ -75,22 +84,41 @@ pub fn stage<IO: RecordIo>(io: &mut IO, target: Slot) -> Result<BootRecord, Stor
 /// `active` slot from the last readable valid record.
 pub fn prepare_boot<IO: RecordIo>(io: &mut IO) -> Result<Slot, StoreError<IO::Error>> {
     let selected = load(io)?;
-    match selected.record.prepare_boot().map_err(StoreError::Transition)? {
-        BootDecision::Trial { slot, state_to_persist } => {
+    match selected
+        .record
+        .prepare_boot()
+        .map_err(StoreError::Transition)?
+    {
+        BootDecision::Trial {
+            slot,
+            state_to_persist,
+        } => {
             commit(io, selected, state_to_persist)?;
             Ok(slot)
         }
-        BootDecision::Stable { slot, state_to_persist: Some(next) } => {
+        BootDecision::Stable {
+            slot,
+            state_to_persist: Some(next),
+        } => {
             commit(io, selected, next)?;
             Ok(slot)
         }
-        BootDecision::Stable { slot, state_to_persist: None } => Ok(slot),
+        BootDecision::Stable {
+            slot,
+            state_to_persist: None,
+        } => Ok(slot),
     }
 }
 
-pub fn confirm<IO: RecordIo>(io: &mut IO, booted: Slot) -> Result<BootRecord, StoreError<IO::Error>> {
+pub fn confirm<IO: RecordIo>(
+    io: &mut IO,
+    booted: Slot,
+) -> Result<BootRecord, StoreError<IO::Error>> {
     let selected = load(io)?;
-    let next = selected.record.confirm(booted).map_err(StoreError::Transition)?;
+    let next = selected
+        .record
+        .confirm(booted)
+        .map_err(StoreError::Transition)?;
     commit(io, selected, next)
 }
 
@@ -105,7 +133,10 @@ mod tests {
     use super::*;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum Fault { Write, Sync }
+    enum Fault {
+        Write,
+        Sync,
+    }
 
     struct MemoryIo {
         copies: [[u8; RECORD_LEN]; 2],
@@ -117,8 +148,13 @@ mod tests {
 
     impl MemoryIo {
         fn blank() -> Self {
-            Self { copies: [[0; RECORD_LEN]; 2], fail_write_after: None,
-                fail_sync: false, corrupt_readback: false, wrote: false }
+            Self {
+                copies: [[0; RECORD_LEN]; 2],
+                fail_write_after: None,
+                fail_sync: false,
+                corrupt_readback: false,
+                wrote: false,
+            }
         }
         fn initialized() -> Self {
             let mut io = Self::blank();
@@ -133,10 +169,16 @@ mod tests {
 
         fn read_copy(&mut self, index: usize) -> Result<[u8; RECORD_LEN], Self::Error> {
             let mut bytes = self.copies[index];
-            if self.wrote && self.corrupt_readback { bytes[0] ^= 1; }
+            if self.wrote && self.corrupt_readback {
+                bytes[0] ^= 1;
+            }
             Ok(bytes)
         }
-        fn write_copy(&mut self, index: usize, bytes: &[u8; RECORD_LEN]) -> Result<(), Self::Error> {
+        fn write_copy(
+            &mut self,
+            index: usize,
+            bytes: &[u8; RECORD_LEN],
+        ) -> Result<(), Self::Error> {
             self.wrote = true;
             if let Some(count) = self.fail_write_after {
                 self.copies[index][..count].copy_from_slice(&bytes[..count]);
@@ -146,7 +188,11 @@ mod tests {
             Ok(())
         }
         fn sync(&mut self) -> Result<(), Self::Error> {
-            if self.fail_sync { Err(Fault::Sync) } else { Ok(()) }
+            if self.fail_sync {
+                Err(Fault::Sync)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -155,12 +201,17 @@ mod tests {
         let mut io = MemoryIo::initialized();
         assert_eq!(prepare_boot(&mut io), Ok(Slot::A));
         assert_eq!(stage(&mut io, Slot::B).unwrap().pending(), Some(Slot::B));
-        assert_eq!(confirm(&mut io, Slot::B), Err(StoreError::Transition(TransitionError::NoPendingTrial)));
+        assert_eq!(
+            confirm(&mut io, Slot::B),
+            Err(StoreError::Transition(TransitionError::NoPendingTrial))
+        );
         assert_eq!(prepare_boot(&mut io), Ok(Slot::B));
         assert_eq!(confirm(&mut io, Slot::B).unwrap().active(), Slot::B);
         assert_eq!(prepare_boot(&mut io), Ok(Slot::B));
         stage(&mut io, Slot::A).unwrap();
-        for _ in 0..crate::MAX_TRIAL_BOOTS { assert_eq!(prepare_boot(&mut io), Ok(Slot::A)); }
+        for _ in 0..crate::MAX_TRIAL_BOOTS {
+            assert_eq!(prepare_boot(&mut io), Ok(Slot::A));
+        }
         assert_eq!(prepare_boot(&mut io), Ok(Slot::B));
         assert_eq!(load(&mut io).unwrap().record.pending(), None);
     }
@@ -192,13 +243,18 @@ mod tests {
         let mut io = MemoryIo::initialized();
         stage(&mut io, Slot::B).unwrap();
         assert_eq!(prepare_boot(&mut io), Ok(Slot::B));
-        assert_eq!(load(&mut io).unwrap().record.attempts_remaining(), crate::MAX_TRIAL_BOOTS - 1);
+        assert_eq!(
+            load(&mut io).unwrap().record.attempts_remaining(),
+            crate::MAX_TRIAL_BOOTS - 1
+        );
         io.wrote = false;
         io
     }
 
     fn assert_safe_after_uncertain_confirmation(io: &mut MemoryIo) {
-        let record = load(io).expect("at least one valid boot-state copy must remain").record;
+        let record = load(io)
+            .expect("at least one valid boot-state copy must remain")
+            .record;
         match (record.active(), record.pending()) {
             (Slot::A, Some(Slot::B)) => {
                 assert_eq!(record.attempts_remaining(), crate::MAX_TRIAL_BOOTS - 1);

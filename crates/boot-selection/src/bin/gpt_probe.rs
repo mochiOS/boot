@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
-use mochios_boot_selection::gpt_identity::{SectorReader, find_boot_esp};
+use mochios_boot_selection::gpt_identity::{find_boot_esp, SectorReader};
 
 struct FileReader(File);
 
@@ -11,7 +11,9 @@ impl SectorReader for FileReader {
     type Error = std::io::Error;
 
     fn read_sector(&mut self, lba: u64, sector: &mut [u8; 512]) -> Result<(), Self::Error> {
-        let offset = lba.checked_mul(512).ok_or(std::io::ErrorKind::InvalidInput)?;
+        let offset = lba
+            .checked_mul(512)
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
         self.0.seek(SeekFrom::Start(offset))?;
         self.0.read_exact(sector)
     }
@@ -35,16 +37,25 @@ fn parse_guid(text: &str) -> Option<[u8; 16]> {
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let image = args.next().ok_or("missing image path")?;
-    let guid = parse_guid(&args.next().ok_or("missing ESP GUID")?)
-        .ok_or("invalid ESP GUID")?;
-    let first = args.next().ok_or("missing first LBA")?
-        .parse::<u64>().map_err(|_| "invalid first LBA")?;
-    let last = args.next().ok_or("missing last LBA")?
-        .parse::<u64>().map_err(|_| "invalid last LBA")?;
-    if args.next().is_some() { return Err("too many arguments".into()); }
+    let guid = parse_guid(&args.next().ok_or("missing ESP GUID")?).ok_or("invalid ESP GUID")?;
+    let first = args
+        .next()
+        .ok_or("missing first LBA")?
+        .parse::<u64>()
+        .map_err(|_| "invalid first LBA")?;
+    let last = args
+        .next()
+        .ok_or("missing last LBA")?
+        .parse::<u64>()
+        .map_err(|_| "invalid last LBA")?;
+    if args.next().is_some() {
+        return Err("too many arguments".into());
+    }
     let file = File::open(image).map_err(|error| error.to_string())?;
     let bytes = file.metadata().map_err(|error| error.to_string())?.len();
-    if bytes == 0 || bytes % 512 != 0 { return Err("invalid image size".into()); }
+    if bytes == 0 || bytes % 512 != 0 {
+        return Err("invalid image size".into());
+    }
     let matched = find_boot_esp(&mut FileReader(file), bytes / 512, guid)
         .map_err(|error| format!("GPT identity probe failed: {error:?}"))?
         .ok_or("ESP GUID not found")?;

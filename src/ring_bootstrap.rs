@@ -193,13 +193,12 @@ fn verify_cpuid(boot_info: &DomainBootInfo) {
         )
     }
     let basic = __cpuid_count(0, 0);
-    let cpu_vendor = if boot_info.hypervisor_backend
-        == mnu_abi::hypervisor::HYPERVISOR_BACKEND_AMD_SVM
-    {
-        *b"AuthenticAMD"
-    } else {
-        *b"GenuineIntel"
-    };
+    let cpu_vendor =
+        if boot_info.hypervisor_backend == mnu_abi::hypervisor::HYPERVISOR_BACKEND_AMD_SVM {
+            *b"AuthenticAMD"
+        } else {
+            *b"GenuineIntel"
+        };
     if basic.eax < 0x0b
         || basic.ebx != u32::from_le_bytes(cpu_vendor[0..4].try_into().unwrap())
         || basic.edx != u32::from_le_bytes(cpu_vendor[4..8].try_into().unwrap())

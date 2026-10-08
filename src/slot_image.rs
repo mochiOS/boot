@@ -24,18 +24,17 @@ pub struct OpenSlot {
     pub header: SlotHeader,
 }
 
-pub fn open(
-    bt: &BootServices,
-    image_handle: Handle,
-    slot: Slot,
-) -> Result<OpenSlot, &'static str> {
-    let loaded = bt.open_protocol_exclusive::<LoadedImage>(image_handle)
+pub fn open(bt: &BootServices, image_handle: Handle, slot: Slot) -> Result<OpenSlot, &'static str> {
+    let loaded = bt
+        .open_protocol_exclusive::<LoadedImage>(image_handle)
         .map_err(|_| "loaded image unavailable")?;
     let esp = loaded.device().ok_or("boot ESP unavailable")?;
     drop(loaded);
-    let esp_path = bt.open_protocol_exclusive::<DevicePath>(esp)
+    let esp_path = bt
+        .open_protocol_exclusive::<DevicePath>(esp)
         .map_err(|_| "boot ESP path unavailable")?;
-    let handles = bt.find_handles::<PartitionInfo>()
+    let handles = bt
+        .find_handles::<PartitionInfo>()
         .map_err(|_| "Boot partition enumeration failed")?;
     let mut candidates = [(u64::MAX, None), (u64::MAX, None)];
     let mut count = 0usize;
@@ -44,16 +43,25 @@ pub fn open(
             Ok(partition) => partition,
             Err(_) => continue,
         };
-        let Some(entry) = partition.gpt_partition_entry() else { continue };
+        let Some(entry) = partition.gpt_partition_entry() else {
+            continue;
+        };
         let partition_type = entry.partition_type_guid;
-        if partition_type != BOOT_TYPE { continue; }
+        if partition_type != BOOT_TYPE {
+            continue;
+        }
         let start = entry.starting_lba;
         drop(partition);
-        let path = bt.open_protocol_exclusive::<DevicePath>(handle)
+        let path = bt
+            .open_protocol_exclusive::<DevicePath>(handle)
             .map_err(|_| "Boot partition path unavailable")?;
-        if !crate::boot_state::same_disk(&esp_path, &path) { continue; }
+        if !crate::boot_state::same_disk(&esp_path, &path) {
+            continue;
+        }
         count += 1;
-        if count > 2 { return Err("unexpected Boot partition count"); }
+        if count > 2 {
+            return Err("unexpected Boot partition count");
+        }
         let candidate = (start, Some(handle));
         if start < candidates[0].0 {
             candidates[1] = candidates[0];
@@ -64,20 +72,35 @@ pub fn open(
             return Err("too many Boot partitions");
         }
     }
-    if count != 2 { return Err("Boot A/B partition pair unavailable"); }
+    if count != 2 {
+        return Err("Boot A/B partition pair unavailable");
+    }
     let handle = match slot {
         Slot::A => candidates[0].1,
         Slot::B => candidates[1].1,
-    }.ok_or("Boot slot unavailable")?;
+    }
+    .ok_or("Boot slot unavailable")?;
     let mut bytes = [0u8; SLOT_HEADER_LEN];
-    read_exact(bt, handle, SlotRegion { offset: 0, length: SLOT_HEADER_LEN as u64 }, &mut bytes)?;
+    read_exact(
+        bt,
+        handle,
+        SlotRegion {
+            offset: 0,
+            length: SLOT_HEADER_LEN as u64,
+        },
+        &mut bytes,
+    )?;
     let header = SlotHeader::decode(&bytes).map_err(|_| "Boot slot header rejected")?;
-    let block = bt.open_protocol_exclusive::<BlockIO>(handle)
+    let block = bt
+        .open_protocol_exclusive::<BlockIO>(handle)
         .map_err(|_| "Boot slot Block I/O unavailable")?;
     let media = block.media();
-    let size = (media.last_block() + 1).checked_mul(SECTOR_BYTES as u64)
+    let size = (media.last_block() + 1)
+        .checked_mul(SECTOR_BYTES as u64)
         .ok_or("Boot slot size overflow")?;
-    if header.image_size != size { return Err("Boot slot size does not match header"); }
+    if header.image_size != size {
+        return Err("Boot slot size does not match header");
+    }
     Ok(OpenSlot { handle, header })
 }
 
@@ -104,15 +127,24 @@ pub fn read_exact(
     {
         return Err("invalid Boot slot region");
     }
-    let block = bt.open_protocol_exclusive::<BlockIO>(handle)
+    let block = bt
+        .open_protocol_exclusive::<BlockIO>(handle)
         .map_err(|_| "Boot slot Block I/O unavailable")?;
     let media = block.media();
-    if !media.is_media_present() || media.block_size() != SECTOR_BYTES as u32 || media.io_align() > 4096 {
+    if !media.is_media_present()
+        || media.block_size() != SECTOR_BYTES as u32
+        || media.io_align() > 4096
+    {
         return Err("unsupported Boot slot geometry");
     }
-    let partition_size = (media.last_block() + 1).checked_mul(SECTOR_BYTES as u64)
+    let partition_size = (media.last_block() + 1)
+        .checked_mul(SECTOR_BYTES as u64)
         .ok_or("Boot slot size overflow")?;
-    if region.offset.checked_add(region.length).is_none_or(|end| end > partition_size) {
+    if region
+        .offset
+        .checked_add(region.length)
+        .is_none_or(|end| end > partition_size)
+    {
         return Err("Boot slot region out of range");
     }
     let mut scratch = AlignedChunk([0; CHUNK_BYTES]);
@@ -121,7 +153,8 @@ pub fn read_exact(
         let wanted = core::cmp::min(CHUNK_BYTES, destination.len() - copied);
         let aligned = (wanted + SECTOR_BYTES - 1) & !(SECTOR_BYTES - 1);
         let lba = region.offset / SECTOR_BYTES as u64 + (copied / SECTOR_BYTES) as u64;
-        block.read_blocks(media.media_id(), lba, &mut scratch.0[..aligned])
+        block
+            .read_blocks(media.media_id(), lba, &mut scratch.0[..aligned])
             .map_err(|_| "Boot slot read failed")?;
         destination[copied..copied + wanted].copy_from_slice(&scratch.0[..wanted]);
         copied += wanted;

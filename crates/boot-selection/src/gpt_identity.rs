@@ -3,12 +3,10 @@
 
 const SECTOR_BYTES: usize = 512;
 const ESP_TYPE: [u8; 16] = [
-    0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11,
-    0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
+    0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
 ];
 const ESP_TYPE_GUID: [u8; 16] = [
-    0xc1, 0x2a, 0x73, 0x28, 0xf8, 0x1f, 0x11, 0xd2,
-    0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
+    0xc1, 0x2a, 0x73, 0x28, 0xf8, 0x1f, 0x11, 0xd2, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,
 ];
 const SYSTEM_TYPE_GUID: [u8; 16] = *b"mochiOS\0\x80\0mPart\x01";
 const DATA_TYPE_GUID: [u8; 16] = *b"mochiOS\0\x80\0mPart\x02";
@@ -17,7 +15,8 @@ const BOOT_TYPE_GUID: [u8; 16] = *b"mochiOS\0\x80\0mPart\x04";
 
 pub trait SectorReader {
     type Error;
-    fn read_sector(&mut self, lba: u64, sector: &mut [u8; SECTOR_BYTES]) -> Result<(), Self::Error>;
+    fn read_sector(&mut self, lba: u64, sector: &mut [u8; SECTOR_BYTES])
+        -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +34,9 @@ pub struct PartitionRange {
 }
 
 impl PartitionRange {
-    pub const fn sectors(self) -> u64 { self.last_lba - self.first_lba + 1 }
+    pub const fn sectors(self) -> u64 {
+        self.last_lba - self.first_lba + 1
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,8 +55,12 @@ pub enum MatchError<E> {
     Ambiguous,
 }
 
-fn le32(bytes: &[u8]) -> u32 { u32::from_le_bytes(bytes.try_into().unwrap()) }
-fn le64(bytes: &[u8]) -> u64 { u64::from_le_bytes(bytes.try_into().unwrap()) }
+fn le32(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes(bytes.try_into().unwrap())
+}
+fn le64(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(bytes.try_into().unwrap())
+}
 
 fn crc32(mut crc: u32, bytes: &[u8]) -> u32 {
     for &byte in bytes {
@@ -96,15 +101,21 @@ where
     R: SectorReader,
     F: FnMut(u32, &[u8]) -> Result<(), MatchError<R::Error>>,
 {
-    if disk_sectors < 68 { return Err(MatchError::InvalidGpt); }
+    if disk_sectors < 68 {
+        return Err(MatchError::InvalidGpt);
+    }
     let mut sector = [0u8; SECTOR_BYTES];
-    reader.read_sector(1, &mut sector).map_err(MatchError::Read)?;
+    reader
+        .read_sector(1, &mut sector)
+        .map_err(MatchError::Read)?;
     if &sector[..8] != b"EFI PART" || le32(&sector[8..12]) != 0x0001_0000 {
         return Err(MatchError::InvalidGpt);
     }
     let header_size = le32(&sector[12..16]) as usize;
-    if !(92..=SECTOR_BYTES).contains(&header_size) || le32(&sector[20..24]) != 0
-        || le64(&sector[24..32]) != 1 || le64(&sector[32..40]) != disk_sectors - 1
+    if !(92..=SECTOR_BYTES).contains(&header_size)
+        || le32(&sector[20..24]) != 0
+        || le64(&sector[24..32]) != 1
+        || le64(&sector[32..40]) != disk_sectors - 1
         || sector[56..72] == [0; 16]
     {
         return Err(MatchError::InvalidGpt);
@@ -116,7 +127,8 @@ where
     }
     let entry_count = le32(&sector[80..84]);
     let entry_size = le32(&sector[84..88]);
-    let table_bytes = (entry_count as u64).checked_mul(entry_size as u64)
+    let table_bytes = (entry_count as u64)
+        .checked_mul(entry_size as u64)
         .ok_or(MatchError::InvalidGpt)?;
     let header = GptHeader {
         first_usable: le64(&sector[40..48]),
@@ -128,12 +140,16 @@ where
         table_sectors: table_bytes.checked_add(511).ok_or(MatchError::InvalidGpt)? / 512,
         table_crc: le32(&sector[88..92]),
     };
-    if header.first_usable >= header.last_usable || header.last_usable >= disk_sectors - 1
+    if header.first_usable >= header.last_usable
+        || header.last_usable >= disk_sectors - 1
         || header.table_lba < 2
-        || header.table_lba.checked_add(header.table_sectors)
+        || header
+            .table_lba
+            .checked_add(header.table_sectors)
             .is_none_or(|end| end > header.first_usable)
         || !(1..=4096).contains(&header.entry_count)
-        || !(128..=512).contains(&header.entry_size) || header.entry_size % 8 != 0
+        || !(128..=512).contains(&header.entry_size)
+        || header.entry_size % 8 != 0
     {
         return Err(MatchError::InvalidGpt);
     }
@@ -143,7 +159,8 @@ where
     let mut entry_fill = 0usize;
     let mut entry_index = 0u32;
     for sector_index in 0..header.table_sectors {
-        reader.read_sector(header.table_lba + sector_index, &mut sector)
+        reader
+            .read_sector(header.table_lba + sector_index, &mut sector)
             .map_err(MatchError::Read)?;
         let remaining = header.table_bytes - sector_index * 512;
         let valid = core::cmp::min(remaining, 512) as usize;
@@ -155,8 +172,10 @@ where
                 if entry[..16] != [0; 16] {
                     let first_lba = le64(&entry[32..40]);
                     let last_lba = le64(&entry[40..48]);
-                    if entry[16..32] == [0; 16] || first_lba < header.first_usable
-                        || last_lba > header.last_usable || first_lba > last_lba
+                    if entry[16..32] == [0; 16]
+                        || first_lba < header.first_usable
+                        || last_lba > header.last_usable
+                        || first_lba > last_lba
                     {
                         return Err(MatchError::InvalidGpt);
                     }
@@ -181,13 +200,22 @@ pub fn find_boot_esp<R: SectorReader>(
     boot_esp_guid: [u8; 16],
 ) -> Result<Option<EspMatch>, MatchError<R::Error>> {
     let mut matched = None;
-    if boot_esp_guid == [0; 16] { return Err(MatchError::InvalidGpt); }
+    if boot_esp_guid == [0; 16] {
+        return Err(MatchError::InvalidGpt);
+    }
     scan_gpt(reader, disk_sectors, |entry_index, entry| {
         if canonical_guid(&entry[16..32]) == boot_esp_guid {
-            if entry[..16] != ESP_TYPE { return Err(MatchError::InvalidGpt); }
-            if matched.is_some() { return Err(MatchError::Ambiguous); }
-            matched = Some(EspMatch { partition_index: entry_index,
-                first_lba: le64(&entry[32..40]), last_lba: le64(&entry[40..48]) });
+            if entry[..16] != ESP_TYPE {
+                return Err(MatchError::InvalidGpt);
+            }
+            if matched.is_some() {
+                return Err(MatchError::Ambiguous);
+            }
+            matched = Some(EspMatch {
+                partition_index: entry_index,
+                first_lba: le64(&entry[32..40]),
+                last_lba: le64(&entry[40..48]),
+            });
         }
         Ok(())
     })?;
@@ -215,7 +243,9 @@ pub fn find_update_layout<R: SectorReader>(
     disk_sectors: u64,
     boot_esp_guid: [u8; 16],
 ) -> Result<Option<UpdateLayout>, MatchError<R::Error>> {
-    if boot_esp_guid == [0; 16] { return Err(MatchError::InvalidGpt); }
+    if boot_esp_guid == [0; 16] {
+        return Err(MatchError::InvalidGpt);
+    }
     let mut parts: [Option<PartitionRange>; 7] = [None; 7];
     scan_gpt(reader, disk_sectors, |index, entry| {
         let type_guid = canonical_guid(&entry[..16]);
@@ -226,23 +256,43 @@ pub fn find_update_layout<R: SectorReader>(
             }
             Some(0)
         } else {
-            if type_guid == BOOT_TYPE_GUID && partition_name_eq(entry, "mochiOS Boot A") { Some(1) }
-            else if type_guid == SYSTEM_TYPE_GUID && partition_name_eq(entry, "mochiOS System A") { Some(2) }
-            else if type_guid == BOOT_TYPE_GUID && partition_name_eq(entry, "mochiOS Boot B") { Some(3) }
-            else if type_guid == SYSTEM_TYPE_GUID && partition_name_eq(entry, "mochiOS System B") { Some(4) }
-            else if type_guid == DATA_TYPE_GUID && partition_name_eq(entry, "mochiOS Data") { Some(5) }
-            else if type_guid == STATE_TYPE_GUID && partition_name_eq(entry, "mochiOS Boot State") { Some(6) }
-            else { None }
+            if type_guid == BOOT_TYPE_GUID && partition_name_eq(entry, "mochiOS Boot A") {
+                Some(1)
+            } else if type_guid == SYSTEM_TYPE_GUID && partition_name_eq(entry, "mochiOS System A")
+            {
+                Some(2)
+            } else if type_guid == BOOT_TYPE_GUID && partition_name_eq(entry, "mochiOS Boot B") {
+                Some(3)
+            } else if type_guid == SYSTEM_TYPE_GUID && partition_name_eq(entry, "mochiOS System B")
+            {
+                Some(4)
+            } else if type_guid == DATA_TYPE_GUID && partition_name_eq(entry, "mochiOS Data") {
+                Some(5)
+            } else if type_guid == STATE_TYPE_GUID && partition_name_eq(entry, "mochiOS Boot State")
+            {
+                Some(6)
+            } else {
+                None
+            }
         };
         if let Some(slot) = slot {
-            if parts[slot].is_some() { return Err(MatchError::Ambiguous); }
-            parts[slot] = Some(PartitionRange { partition_index: index,
-                first_lba: le64(&entry[32..40]), last_lba: le64(&entry[40..48]) });
+            if parts[slot].is_some() {
+                return Err(MatchError::Ambiguous);
+            }
+            parts[slot] = Some(PartitionRange {
+                partition_index: index,
+                first_lba: le64(&entry[32..40]),
+                last_lba: le64(&entry[40..48]),
+            });
         }
         Ok(())
     })?;
-    if parts[0].is_none() { return Ok(None); }
-    if parts.iter().any(Option::is_none) { return Err(MatchError::InvalidGpt); }
+    if parts[0].is_none() {
+        return Ok(None);
+    }
+    if parts.iter().any(Option::is_none) {
+        return Err(MatchError::InvalidGpt);
+    }
     let parts = parts.map(Option::unwrap);
     for left in 0..parts.len() {
         for right in left + 1..parts.len() {
@@ -254,8 +304,11 @@ pub fn find_update_layout<R: SectorReader>(
         }
     }
     Ok(Some(UpdateLayout {
-        esp: parts[0], boot: [parts[1], parts[3]], system: [parts[2], parts[4]],
-        data: parts[5], state: parts[6],
+        esp: parts[0],
+        boot: [parts[1], parts[3]],
+        system: [parts[2], parts[4]],
+        data: parts[5],
+        state: parts[6],
     }))
 }
 
@@ -267,8 +320,8 @@ mod tests {
     use std::vec::Vec;
 
     const GUID: [u8; 16] = [
-        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
-        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+        0x88,
     ];
 
     struct MemoryDisk(Vec<[u8; 512]>);
@@ -286,7 +339,10 @@ mod tests {
         let table_bytes = entry_count * entry_size;
         let mut checksum = !0;
         for offset in 0..table_bytes {
-            checksum = crc32(checksum, &disk.0[2 + offset / 512][offset % 512..offset % 512 + 1]);
+            checksum = crc32(
+                checksum,
+                &disk.0[2 + offset / 512][offset % 512..offset % 512 + 1],
+            );
         }
         let table_crc = !checksum;
         disk.0[1][88..92].copy_from_slice(&table_crc.to_le_bytes());
@@ -388,43 +444,72 @@ mod tests {
     #[test]
     fn matches_canonical_uefi_guid_only_after_crc_checks() {
         let mut disk = fixture_disk();
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Ok(Some(EspMatch {
-            partition_index: 0, first_lba: 34, last_lba: 40,
-        })));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Ok(Some(EspMatch {
+                partition_index: 0,
+                first_lba: 34,
+                last_lba: 40,
+            }))
+        );
         assert_eq!(find_boot_esp(&mut disk, 128, [9; 16]), Ok(None));
         disk.0[2][80] ^= 1;
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Err(MatchError::InvalidGpt)
+        );
     }
 
     #[test]
     fn rejects_corrupt_header_wrong_type_duplicate_and_out_of_range() {
         let mut disk = fixture_disk();
         disk.0[1][32] ^= 1;
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Err(MatchError::InvalidGpt)
+        );
 
         let mut disk = fixture_disk();
         disk.0[2][0] ^= 1;
         finish_crcs(&mut disk);
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Err(MatchError::InvalidGpt)
+        );
 
         let mut disk = fixture_disk();
         add_esp(&mut disk, 1);
         finish_crcs(&mut disk);
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Err(MatchError::Ambiguous));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Err(MatchError::Ambiguous)
+        );
 
         let mut disk = fixture_disk();
         disk.0[2][32..40].copy_from_slice(&1u64.to_le_bytes());
         finish_crcs(&mut disk);
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Err(MatchError::InvalidGpt)
+        );
     }
 
     #[test]
     fn rejects_missing_identity_and_truncated_disk() {
         let mut disk = fixture_disk();
-        assert_eq!(find_boot_esp(&mut disk, 128, [0; 16]), Err(MatchError::InvalidGpt));
-        assert_eq!(find_boot_esp(&mut disk, 100, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, [0; 16]),
+            Err(MatchError::InvalidGpt)
+        );
+        assert_eq!(
+            find_boot_esp(&mut disk, 100, GUID),
+            Err(MatchError::InvalidGpt)
+        );
         disk.0.truncate(2);
-        assert_eq!(find_boot_esp(&mut disk, 128, GUID), Err(MatchError::Read(())));
+        assert_eq!(
+            find_boot_esp(&mut disk, 128, GUID),
+            Err(MatchError::Read(()))
+        );
     }
 
     #[test]
@@ -445,21 +530,49 @@ mod tests {
         let mut disk = layout_disk();
         disk.0[3][2 * 128..2 * 128 + 16].fill(0);
         finish_crcs(&mut disk);
-        assert_eq!(find_update_layout(&mut disk, 256, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_update_layout(&mut disk, 256, GUID),
+            Err(MatchError::InvalidGpt)
+        );
 
         let mut disk = layout_disk();
-        add_partition(&mut disk, 7, BOOT_TYPE_GUID, [7; 16], 208, 211, "mochiOS Boot A");
+        add_partition(
+            &mut disk,
+            7,
+            BOOT_TYPE_GUID,
+            [7; 16],
+            208,
+            211,
+            "mochiOS Boot A",
+        );
         finish_crcs(&mut disk);
-        assert_eq!(find_update_layout(&mut disk, 256, GUID), Err(MatchError::Ambiguous));
+        assert_eq!(
+            find_update_layout(&mut disk, 256, GUID),
+            Err(MatchError::Ambiguous)
+        );
 
         let mut disk = layout_disk();
-        add_partition(&mut disk, 1, DATA_TYPE_GUID, [1; 16], 40, 59, "mochiOS Boot A");
+        add_partition(
+            &mut disk,
+            1,
+            DATA_TYPE_GUID,
+            [1; 16],
+            40,
+            59,
+            "mochiOS Boot A",
+        );
         finish_crcs(&mut disk);
-        assert_eq!(find_update_layout(&mut disk, 256, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_update_layout(&mut disk, 256, GUID),
+            Err(MatchError::InvalidGpt)
+        );
 
         let mut disk = layout_disk();
         disk.0[2][3 * 128 + 32..3 * 128 + 40].copy_from_slice(&80u64.to_le_bytes());
         finish_crcs(&mut disk);
-        assert_eq!(find_update_layout(&mut disk, 256, GUID), Err(MatchError::InvalidGpt));
+        assert_eq!(
+            find_update_layout(&mut disk, 256, GUID),
+            Err(MatchError::InvalidGpt)
+        );
     }
 }

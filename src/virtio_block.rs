@@ -1,10 +1,10 @@
 use core::mem::{align_of, size_of};
 use core::ptr::{read_volatile, write_bytes, write_volatile};
-use core::sync::atomic::{Ordering, fence};
+use core::sync::atomic::{fence, Ordering};
 
 use mnu_abi::hypervisor::{
-    DomainBootInfo, HYPERCALL_SUCCESS, HypercallNumber, PCI_RESOURCE_FLAG_WRITABLE,
-    PciDeviceResource,
+    DomainBootInfo, HypercallNumber, PciDeviceResource, HYPERCALL_SUCCESS,
+    PCI_RESOURCE_FLAG_WRITABLE,
 };
 
 use crate::domain_hypercall::invoke;

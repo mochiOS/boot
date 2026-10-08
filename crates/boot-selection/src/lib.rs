@@ -20,11 +20,18 @@ pub enum Slot {
 
 impl Slot {
     pub const fn other(self) -> Self {
-        match self { Self::A => Self::B, Self::B => Self::A }
+        match self {
+            Self::A => Self::B,
+            Self::B => Self::A,
+        }
     }
 
     const fn from_byte(value: u8) -> Option<Self> {
-        match value { 1 => Some(Self::A), 2 => Some(Self::B), _ => None }
+        match value {
+            1 => Some(Self::A),
+            2 => Some(Self::B),
+            _ => None,
+        }
     }
 }
 
@@ -46,8 +53,14 @@ pub enum TransitionError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootDecision {
-    Stable { slot: Slot, state_to_persist: Option<BootRecord> },
-    Trial { slot: Slot, state_to_persist: BootRecord },
+    Stable {
+        slot: Slot,
+        state_to_persist: Option<BootRecord>,
+    },
+    Trial {
+        slot: Slot,
+        state_to_persist: BootRecord,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,21 +72,40 @@ pub struct SelectedRecord {
 
 impl BootRecord {
     pub const fn initial() -> Self {
-        Self { generation: 1, active: Slot::A, pending: None, attempts_remaining: 0 }
+        Self {
+            generation: 1,
+            active: Slot::A,
+            pending: None,
+            attempts_remaining: 0,
+        }
     }
 
-    pub const fn generation(&self) -> u64 { self.generation }
-    pub const fn active(&self) -> Slot { self.active }
-    pub const fn pending(&self) -> Option<Slot> { self.pending }
-    pub const fn attempts_remaining(&self) -> u8 { self.attempts_remaining }
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub const fn active(&self) -> Slot {
+        self.active
+    }
+    pub const fn pending(&self) -> Option<Slot> {
+        self.pending
+    }
+    pub const fn attempts_remaining(&self) -> u8 {
+        self.attempts_remaining
+    }
 
     /// Call only after the inactive slot has been fully verified and synced.
     pub fn stage(self, target: Slot) -> Result<Self, TransitionError> {
-        if self.pending.is_some() { return Err(TransitionError::TrialAlreadyPending); }
-        if target == self.active { return Err(TransitionError::WrongSlot); }
+        if self.pending.is_some() {
+            return Err(TransitionError::TrialAlreadyPending);
+        }
+        if target == self.active {
+            return Err(TransitionError::WrongSlot);
+        }
         Ok(Self {
-            generation: self.next_generation()?, active: self.active,
-            pending: Some(target), attempts_remaining: MAX_TRIAL_BOOTS,
+            generation: self.next_generation()?,
+            active: self.active,
+            pending: Some(target),
+            attempts_remaining: MAX_TRIAL_BOOTS,
         })
     }
 
@@ -92,11 +124,16 @@ impl BootRecord {
             (Some(_), 0) => Ok(BootDecision::Stable {
                 slot: self.active,
                 state_to_persist: Some(Self {
-                    generation: self.next_generation()?, pending: None,
-                    attempts_remaining: 0, ..self
+                    generation: self.next_generation()?,
+                    pending: None,
+                    attempts_remaining: 0,
+                    ..self
                 }),
             }),
-            (None, _) => Ok(BootDecision::Stable { slot: self.active, state_to_persist: None }),
+            (None, _) => Ok(BootDecision::Stable {
+                slot: self.active,
+                state_to_persist: None,
+            }),
         }
     }
 
@@ -106,21 +143,29 @@ impl BootRecord {
             return Err(TransitionError::NoPendingTrial);
         }
         Ok(Self {
-            generation: self.next_generation()?, active: booted,
-            pending: None, attempts_remaining: 0,
+            generation: self.next_generation()?,
+            active: booted,
+            pending: None,
+            attempts_remaining: 0,
         })
     }
 
     pub fn rollback(self) -> Result<Self, TransitionError> {
-        if self.pending.is_none() { return Err(TransitionError::NoPendingTrial); }
+        if self.pending.is_none() {
+            return Err(TransitionError::NoPendingTrial);
+        }
         Ok(Self {
-            generation: self.next_generation()?, pending: None,
-            attempts_remaining: 0, ..self
+            generation: self.next_generation()?,
+            pending: None,
+            attempts_remaining: 0,
+            ..self
         })
     }
 
     fn next_generation(self) -> Result<u64, TransitionError> {
-        self.generation.checked_add(1).ok_or(TransitionError::GenerationExhausted)
+        self.generation
+            .checked_add(1)
+            .ok_or(TransitionError::GenerationExhausted)
     }
 
     pub fn encode(self) -> [u8; RECORD_LEN] {
@@ -137,19 +182,34 @@ impl BootRecord {
     }
 
     pub fn decode(bytes: &[u8; RECORD_LEN]) -> Option<Self> {
-        if bytes[..4] != MAGIC || bytes[4] != FORMAT_VERSION
+        if bytes[..4] != MAGIC
+            || bytes[4] != FORMAT_VERSION
             || bytes[16..28].iter().any(|byte| *byte != 0)
             || u32::from_le_bytes(bytes[28..32].try_into().ok()?) != crc32(&bytes[..28])
-        { return None; }
+        {
+            return None;
+        }
         let active = Slot::from_byte(bytes[5])?;
-        let pending = if bytes[6] == 0 { None } else { Some(Slot::from_byte(bytes[6])?) };
+        let pending = if bytes[6] == 0 {
+            None
+        } else {
+            Some(Slot::from_byte(bytes[6])?)
+        };
         let attempts_remaining = bytes[7];
         let generation = u64::from_le_bytes(bytes[8..16].try_into().ok()?);
-        if generation == 0 || attempts_remaining > MAX_TRIAL_BOOTS
+        if generation == 0
+            || attempts_remaining > MAX_TRIAL_BOOTS
             || pending == Some(active)
             || (pending.is_none() && attempts_remaining != 0)
-        { return None; }
-        Some(Self { generation, active, pending, attempts_remaining })
+        {
+            return None;
+        }
+        Some(Self {
+            generation,
+            active,
+            pending,
+            attempts_remaining,
+        })
     }
 }
 
@@ -164,12 +224,27 @@ pub fn select_for_update(
     second: &[u8; RECORD_LEN],
 ) -> Option<SelectedRecord> {
     match (BootRecord::decode(first), BootRecord::decode(second)) {
-        (Some(left), Some(right)) if left.generation > right.generation => Some(SelectedRecord { record: left, write_copy: 1 }),
-        (Some(left), Some(right)) if right.generation > left.generation => Some(SelectedRecord { record: right, write_copy: 0 }),
-        (Some(left), Some(right)) if left == right => Some(SelectedRecord { record: left, write_copy: 0 }),
+        (Some(left), Some(right)) if left.generation > right.generation => Some(SelectedRecord {
+            record: left,
+            write_copy: 1,
+        }),
+        (Some(left), Some(right)) if right.generation > left.generation => Some(SelectedRecord {
+            record: right,
+            write_copy: 0,
+        }),
+        (Some(left), Some(right)) if left == right => Some(SelectedRecord {
+            record: left,
+            write_copy: 0,
+        }),
         (Some(_), Some(_)) => None,
-        (Some(left), None) => Some(SelectedRecord { record: left, write_copy: 1 }),
-        (None, Some(right)) => Some(SelectedRecord { record: right, write_copy: 0 }),
+        (Some(left), None) => Some(SelectedRecord {
+            record: left,
+            write_copy: 1,
+        }),
+        (None, Some(right)) => Some(SelectedRecord {
+            record: right,
+            write_copy: 0,
+        }),
         (None, None) => None,
     }
 }
@@ -193,14 +268,24 @@ mod tests {
     fn trial_is_consumed_before_boot_and_unconfirmed_slot_rolls_back() {
         let mut record = BootRecord::initial().stage(Slot::B).unwrap();
         for remaining in (1..=MAX_TRIAL_BOOTS).rev() {
-            let BootDecision::Trial { slot, state_to_persist } = record.prepare_boot().unwrap()
-                else { panic!("trial slot not selected") };
+            let BootDecision::Trial {
+                slot,
+                state_to_persist,
+            } = record.prepare_boot().unwrap()
+            else {
+                panic!("trial slot not selected")
+            };
             assert_eq!(slot, Slot::B);
             assert_eq!(state_to_persist.attempts_remaining(), remaining - 1);
             record = state_to_persist;
         }
-        let BootDecision::Stable { slot, state_to_persist: Some(rolled_back) } = record.prepare_boot().unwrap()
-            else { panic!("old slot not recovered") };
+        let BootDecision::Stable {
+            slot,
+            state_to_persist: Some(rolled_back),
+        } = record.prepare_boot().unwrap()
+        else {
+            panic!("old slot not recovered")
+        };
         assert_eq!(slot, Slot::A);
         assert_eq!(rolled_back.active(), Slot::A);
         assert_eq!(rolled_back.pending(), None);
@@ -209,10 +294,20 @@ mod tests {
     #[test]
     fn only_running_trial_slot_can_commit() {
         let pending = BootRecord::initial().stage(Slot::B).unwrap();
-        assert_eq!(pending.confirm(Slot::A), Err(TransitionError::NoPendingTrial));
-        assert_eq!(pending.confirm(Slot::B), Err(TransitionError::NoPendingTrial));
-        let BootDecision::Trial { state_to_persist, .. } = pending.prepare_boot().unwrap()
-            else { panic!("trial missing") };
+        assert_eq!(
+            pending.confirm(Slot::A),
+            Err(TransitionError::NoPendingTrial)
+        );
+        assert_eq!(
+            pending.confirm(Slot::B),
+            Err(TransitionError::NoPendingTrial)
+        );
+        let BootDecision::Trial {
+            state_to_persist, ..
+        } = pending.prepare_boot().unwrap()
+        else {
+            panic!("trial missing")
+        };
         let committed = state_to_persist.confirm(Slot::B).unwrap();
         assert_eq!(committed.active(), Slot::B);
         assert_eq!(committed.pending(), None);
@@ -253,9 +348,18 @@ mod tests {
         let checksum = crc32(&wrong[..28]);
         wrong[28..32].copy_from_slice(&checksum.to_le_bytes());
         assert_eq!(BootRecord::decode(&wrong), None);
-        let conflicting = BootRecord { active: Slot::B, ..old };
+        let conflicting = BootRecord {
+            active: Slot::B,
+            ..old
+        };
         assert_eq!(newest_valid(&old.encode(), &conflicting.encode()), None);
-        let exhausted = BootRecord { generation: u64::MAX, ..old };
-        assert_eq!(exhausted.stage(Slot::B), Err(TransitionError::GenerationExhausted));
+        let exhausted = BootRecord {
+            generation: u64::MAX,
+            ..old
+        };
+        assert_eq!(
+            exhausted.stage(Slot::B),
+            Err(TransitionError::GenerationExhausted)
+        );
     }
 }
