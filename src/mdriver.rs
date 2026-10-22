@@ -489,7 +489,7 @@ fn install_metadata_reference(client: &mut Client) -> Result<u32, Error> {
     if let Some(reference) = client.install_metadata_reference {
         return Ok(reference);
     }
-    let digest = mnu::init::fs::kernel_read_initfs("/install/rootfs.sha256")
+    let digest = mnu::init::boot_data::platform_data()
         .filter(|bytes| bytes.len() == 32)
         .ok_or(Error::Protocol)?;
     let address = client.ring_address + MDRIVER_INSTALL_METADATA_PAGE * 4096;

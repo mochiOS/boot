@@ -268,7 +268,6 @@ dependencies = [
 [[package]]
 name = "mnu"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#d31d5b422fb53ccf7f39259a25eeaff8dea57ef3"
 dependencies = [
  "linked_list_allocator",
  "mnu-abi",
@@ -287,7 +286,6 @@ version = "0.1.0"
 [[package]]
 name = "mnu-csprng"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#d31d5b422fb53ccf7f39259a25eeaff8dea57ef3"
 dependencies = [
  "rand_chacha",
  "rand_core",
@@ -297,12 +295,10 @@ dependencies = [
 [[package]]
 name = "mnu-metrics"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#d31d5b422fb53ccf7f39259a25eeaff8dea57ef3"
 
 [[package]]
 name = "mnu-time-core"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/mnu#d31d5b422fb53ccf7f39259a25eeaff8dea57ef3"
 
 [[package]]
 name = "mochiOS"
