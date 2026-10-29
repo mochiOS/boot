@@ -1,5 +1,8 @@
 use core::ptr::copy_nonoverlapping;
 
+#[path = "storage_flush.rs"]
+mod storage_flush;
+
 use mnu_abi::hypervisor::{
     HypercallNumber, DOMAIN_FEATURE_EVENT_CHANNEL, DOMAIN_FEATURE_EVENT_POLL,
     DOMAIN_FEATURE_GRANT_TABLE, DOMAIN_FEATURE_SHARED_RING, EVENT_CHANNEL_NO_EVENT,
@@ -10,7 +13,7 @@ use mnu_abi::shared_ring::{
 };
 use mochios_mdriver_protocol::control::{
     MdriverControlRequest, MdriverControlResponse, MDRIVER_BLOCK_MAX_TRANSFER,
-    MDRIVER_BLOCK_SECTOR_SIZE, MDRIVER_CONTROL_BLOCK_FLUSH, MDRIVER_CONTROL_BLOCK_READ,
+    MDRIVER_BLOCK_SECTOR_SIZE, MDRIVER_CONTROL_BLOCK_READ,
     MDRIVER_CONTROL_BLOCK_WRITE, MDRIVER_CONTROL_CAPABILITIES, MDRIVER_CONTROL_CLOSE_DEVICE,
     MDRIVER_CONTROL_CREATE_PARTITION, MDRIVER_CONTROL_DELETE_PARTITION,
     MDRIVER_CONTROL_DISPLAY_INFO, MDRIVER_CONTROL_ENUMERATE, MDRIVER_CONTROL_INSPECT_STORAGE,
@@ -19,7 +22,7 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_PRESENT_GPU_SCENE,
     MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER, MDRIVER_CONTROL_START_SESSION,
     MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK, MDRIVER_CONTROL_VERSION,
-    MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH, MDRIVER_DEVICE_FEATURE_BLOCK_READ,
+    MDRIVER_DEVICE_FEATURE_BLOCK_READ,
     MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
     MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE, MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE,
     MDRIVER_DEVICE_FEATURE_DISPLAY_TILE, MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY,
@@ -56,6 +59,7 @@ const EIO: i32 = -5;
 const ENXIO: i32 = -6;
 const EINVAL: i32 = -22;
 const EROFS: i32 = -30;
+const ENOSYS: i32 = -38;
 const MOCHIOS_PARTITION_TYPE: [u64; 2] = [0x5300_694f_6d6f_6368, 0x0174_7261_506d_0080];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -704,15 +708,12 @@ extern "C" fn disk_flush(disk_id: u32) -> i32 {
     let Some(block) = client.block else {
         return ENXIO;
     };
-    if block.features & MDRIVER_DEVICE_FEATURE_BLOCK_FLUSH == 0 {
-        return 0;
-    }
-    match transact(
-        client,
-        MdriverControlRequest::new(MDRIVER_CONTROL_BLOCK_FLUSH, block.device_id, [0; 4]),
-    ) {
-        Ok(response) if response.status == MDRIVER_CONTROL_STATUS_OK => 0,
-        _ => EIO,
+    match storage_flush::flush_with(block.device_id, block.features, |request| {
+        transact(client, request)
+    }) {
+        Ok(()) => 0,
+        Err(storage_flush::FlushError::Unsupported) => ENOSYS,
+        Err(_) => EIO,
     }
 }
 
