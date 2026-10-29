@@ -258,3 +258,11 @@ mod tests {
         );
     }
 }
+
+// Optional: never include this in the mandatory backwards-compatible mask.
+pub const MDRIVER_CONTROL_CAP_SCOPED_STORAGE: u64 = 1 << 8;
+pub const MDRIVER_CONTROL_OPEN_REGION: u16 = 27;
+pub const MDRIVER_CONTROL_REGION_READ: u16 = 28;
+pub const MDRIVER_CONTROL_REGION_WRITE: u16 = 29;
+pub const MDRIVER_CONTROL_REGION_FLUSH: u16 = 30;
+pub const MDRIVER_CONTROL_CLOSE_REGION: u16 = 31;

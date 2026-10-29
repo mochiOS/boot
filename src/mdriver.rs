@@ -1,19 +1,20 @@
 use core::ptr::copy_nonoverlapping;
 
+#[path = "scoped_storage.rs"]
+mod scoped_storage;
 #[path = "storage_flush.rs"]
 mod storage_flush;
 
 use mnu_abi::hypervisor::{
-    HypercallNumber, DOMAIN_FEATURE_EVENT_CHANNEL, DOMAIN_FEATURE_EVENT_POLL,
-    DOMAIN_FEATURE_GRANT_TABLE, DOMAIN_FEATURE_SHARED_RING, EVENT_CHANNEL_NO_EVENT,
-    GRANT_FLAG_WRITABLE, GRANT_RANGE_PAGE_COUNT_SHIFT, GRANT_REF_INVALID, HYPERCALL_SUCCESS,
+    DOMAIN_FEATURE_EVENT_CHANNEL, DOMAIN_FEATURE_EVENT_POLL, DOMAIN_FEATURE_GRANT_TABLE,
+    DOMAIN_FEATURE_SHARED_RING, EVENT_CHANNEL_NO_EVENT, GRANT_FLAG_WRITABLE,
+    GRANT_RANGE_PAGE_COUNT_SHIFT, GRANT_REF_INVALID, HYPERCALL_SUCCESS, HypercallNumber,
 };
 use mnu_abi::shared_ring::{
-    initialize, pop_response, push_request, SharedRingError, SharedRingMessage, SharedRingPage,
+    SharedRingError, SharedRingMessage, SharedRingPage, initialize, pop_response, push_request,
 };
 use mochios_mdriver_protocol::control::{
-    MdriverControlRequest, MdriverControlResponse, MDRIVER_BLOCK_MAX_TRANSFER,
-    MDRIVER_BLOCK_SECTOR_SIZE, MDRIVER_CONTROL_BLOCK_READ,
+    MDRIVER_BLOCK_MAX_TRANSFER, MDRIVER_BLOCK_SECTOR_SIZE, MDRIVER_CONTROL_BLOCK_READ,
     MDRIVER_CONTROL_BLOCK_WRITE, MDRIVER_CONTROL_CAPABILITIES, MDRIVER_CONTROL_CLOSE_DEVICE,
     MDRIVER_CONTROL_CREATE_PARTITION, MDRIVER_CONTROL_DELETE_PARTITION,
     MDRIVER_CONTROL_DISPLAY_INFO, MDRIVER_CONTROL_ENUMERATE, MDRIVER_CONTROL_INSPECT_STORAGE,
@@ -22,16 +23,16 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_CONTROL_PRESENT_DISPLAY, MDRIVER_CONTROL_PRESENT_GPU_SCENE,
     MDRIVER_CONTROL_REGISTER_DISPLAY_BUFFER, MDRIVER_CONTROL_START_SESSION,
     MDRIVER_CONTROL_STATUS_END, MDRIVER_CONTROL_STATUS_OK, MDRIVER_CONTROL_VERSION,
-    MDRIVER_DEVICE_FEATURE_BLOCK_READ,
-    MDRIVER_DEVICE_FEATURE_BLOCK_WRITE, MDRIVER_DEVICE_FEATURE_DISPLAY_BULK,
-    MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE, MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE,
-    MDRIVER_DEVICE_FEATURE_DISPLAY_TILE, MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY,
-    MDRIVER_DISPLAY_BUFFER_PAGE, MDRIVER_DISPLAY_BULK_FIRST_PAGE,
-    MDRIVER_DISPLAY_BULK_MAX_TRANSFER, MDRIVER_DISPLAY_BULK_PAGE_COUNT,
-    MDRIVER_DISPLAY_GPU_SCENE_COMMIT_WIDTH, MDRIVER_DISPLAY_GPU_SCENE_COMMIT_X,
-    MDRIVER_DISPLAY_MAX_TRANSFER, MDRIVER_DISPLAY_OPEN_SHARED_SURFACE, MDRIVER_DISPLAY_PIXEL_BYTES,
+    MDRIVER_DEVICE_FEATURE_BLOCK_READ, MDRIVER_DEVICE_FEATURE_BLOCK_WRITE,
+    MDRIVER_DEVICE_FEATURE_DISPLAY_BULK, MDRIVER_DEVICE_FEATURE_DISPLAY_GPU_SCENE,
+    MDRIVER_DEVICE_FEATURE_DISPLAY_SHARED_SURFACE, MDRIVER_DEVICE_FEATURE_DISPLAY_TILE,
+    MDRIVER_DEVICE_KIND_BLOCK, MDRIVER_DEVICE_KIND_DISPLAY, MDRIVER_DISPLAY_BUFFER_PAGE,
+    MDRIVER_DISPLAY_BULK_FIRST_PAGE, MDRIVER_DISPLAY_BULK_MAX_TRANSFER,
+    MDRIVER_DISPLAY_BULK_PAGE_COUNT, MDRIVER_DISPLAY_GPU_SCENE_COMMIT_WIDTH,
+    MDRIVER_DISPLAY_GPU_SCENE_COMMIT_X, MDRIVER_DISPLAY_MAX_TRANSFER,
+    MDRIVER_DISPLAY_OPEN_SHARED_SURFACE, MDRIVER_DISPLAY_PIXEL_BYTES,
     MDRIVER_DISPLAY_SURFACE_FIRST_PAGE, MDRIVER_DISPLAY_SURFACE_MIN_PAGE_COUNT,
-    MDRIVER_STORAGE_QUERY_PARTITION_GUIDS,
+    MDRIVER_STORAGE_QUERY_PARTITION_GUIDS, MdriverControlRequest, MdriverControlResponse,
 };
 use mochios_mdriver_protocol::{
     BLOCK_DATA_PAGE as MDRIVER_BLOCK_DATA_PAGE, CONTROL_IRQ_PORT as MDRIVER_CONTROL_IRQ_PORT,
@@ -125,6 +126,10 @@ struct BlockCandidate {
 struct Client {
     ring_address: u64,
     request_id: u64,
+    poisoned: bool,
+    capabilities: u64,
+    scoped: Option<scoped_storage::Region>,
+    scoped_reference: Option<u32>,
     block: Option<BlockState>,
     install_metadata_reference: Option<u32>,
     block_candidates: [Option<BlockCandidate>; MAX_BLOCK_CANDIDATES],
@@ -262,6 +267,10 @@ fn connect_client() -> Result<(), Error> {
     let mut client = Client {
         ring_address: grant_start,
         request_id: 1,
+        poisoned: false,
+        capabilities: 0,
+        scoped: None,
+        scoped_reference: None,
         block: None,
         install_metadata_reference: None,
         block_candidates: [None; MAX_BLOCK_CANDIDATES],
@@ -290,6 +299,7 @@ fn connect_client() -> Result<(), Error> {
         return Err(Error::Protocol);
     }
 
+    client.capabilities = negotiated.values[1];
     let device_count = negotiated.values[2] as u32;
     let mut block_candidate_count = 0usize;
     let mut display_candidate = None;
@@ -450,6 +460,14 @@ pub fn storage_control(
             None => MdriverControlResponse::new(operation, MDRIVER_CONTROL_STATUS_END, 0, [0; 4]),
         });
     }
+    if matches!(
+        operation,
+        mnu_abi::STORAGE_CONTROL_OPEN_REGION | mnu_abi::STORAGE_CONTROL_CLOSE_REGION
+    ) {
+        let mut guard = CLIENT.lock();
+        let client = guard.as_mut().ok_or(Error::Device)?;
+        return scoped_storage::control(client, operation, device_id, arguments);
+    }
     if !matches!(
         operation,
         STORAGE_CONTROL_INSPECT
@@ -461,7 +479,8 @@ pub fn storage_control(
     }
     let mut guard = CLIENT.lock();
     let client = guard.as_mut().ok_or(Error::Device)?;
-    if client.block.is_some()
+    if client.scoped.is_some()
+        || (client.block.is_some() && operation != STORAGE_CONTROL_INSPECT)
         || !client
             .block_candidates
             .iter()
@@ -490,8 +509,8 @@ pub fn storage_control(
 }
 
 fn install_metadata_reference(client: &mut Client) -> Result<u32, Error> {
-    if let Some(reference) = client.install_metadata_reference {
-        return Ok(reference);
+    if client.poisoned || client.scoped.is_some() {
+        return Err(Error::Protocol);
     }
     let digest = mnu::init::boot_data::platform_data()
         .filter(|bytes| bytes.len() == 32)
@@ -500,6 +519,9 @@ fn install_metadata_reference(client: &mut Client) -> Result<u32, Error> {
     unsafe {
         core::ptr::write_bytes(address as *mut u8, 0, 4096);
         copy_nonoverlapping(digest.as_ptr(), address as *mut u8, digest.len());
+    }
+    if let Some(reference) = client.install_metadata_reference {
+        return Ok(reference);
     }
     let reference = hypervisor_guest::invoke(
         HypercallNumber::GrantCreate,
@@ -563,8 +585,22 @@ fn transact(
     client: &mut Client,
     request: MdriverControlRequest,
 ) -> Result<MdriverControlResponse, Error> {
+    if client.poisoned {
+        return Err(Error::Protocol);
+    }
+    let result = transact_inner(client, request);
+    if result.is_err() {
+        client.poisoned = true;
+    }
+    result
+}
+
+fn transact_inner(
+    client: &mut Client,
+    request: MdriverControlRequest,
+) -> Result<MdriverControlResponse, Error> {
     let id = client.request_id;
-    client.request_id = client.request_id.wrapping_add(1);
+    client.request_id = client.request_id.checked_add(1).ok_or(Error::Protocol)?;
     let message = SharedRingMessage::new(MDRIVER_CONTROL_REQUEST_KIND, 0, id, &request.encode())
         .map_err(|_| Error::Ring)?;
     let ring = client.ring_address as *mut SharedRingPage;
@@ -667,28 +703,28 @@ extern "C" fn disk_probe() -> i32 {
 }
 
 extern "C" fn disk_read(disk_id: u32, lba: u64, buffer: *mut u8, length: usize) -> i32 {
-    if disk_id != 0 || buffer.is_null() || length == 0 || length % 512 != 0 {
+    if buffer.is_null() || length == 0 || length % 512 != 0 {
         return EINVAL;
     }
     let mut guard = CLIENT.lock();
     let Some(client) = guard.as_mut() else {
         return ENXIO;
     };
-    let Some(block) = client.block else {
+    let Some(block) = scoped_storage::block(client, disk_id) else {
         return ENXIO;
     };
     unsafe { transfer(client, block, lba, buffer, length, false) }
 }
 
 extern "C" fn disk_write(disk_id: u32, lba: u64, buffer: *const u8, length: usize) -> i32 {
-    if disk_id != 0 || buffer.is_null() || length == 0 || length % 512 != 0 {
+    if buffer.is_null() || length == 0 || length % 512 != 0 {
         return EINVAL;
     }
     let mut guard = CLIENT.lock();
     let Some(client) = guard.as_mut() else {
         return ENXIO;
     };
-    let Some(block) = client.block else {
+    let Some(block) = scoped_storage::block(client, disk_id) else {
         return ENXIO;
     };
     if block.features & MDRIVER_DEVICE_FEATURE_BLOCK_WRITE == 0 {
@@ -698,16 +734,16 @@ extern "C" fn disk_write(disk_id: u32, lba: u64, buffer: *const u8, length: usiz
 }
 
 extern "C" fn disk_flush(disk_id: u32) -> i32 {
-    if disk_id != 0 {
-        return EINVAL;
-    }
     let mut guard = CLIENT.lock();
     let Some(client) = guard.as_mut() else {
         return ENXIO;
     };
-    let Some(block) = client.block else {
+    let Some(block) = scoped_storage::block(client, disk_id) else {
         return ENXIO;
     };
+    if disk_id != 0 {
+        return scoped_storage::flush(client, disk_id);
+    }
     match storage_flush::flush_with(block.device_id, block.features, |request| {
         transact(client, request)
     }) {
@@ -725,6 +761,41 @@ unsafe fn transfer(
     length: usize,
     write: bool,
 ) -> i32 {
+    if client.poisoned {
+        return EIO;
+    }
+    if block.device_id & 0x80000000 != 0 {
+        if lba
+            .checked_add((length / 512) as u64)
+            .is_none_or(|end| end > block.capacity_sectors)
+        {
+            return EINVAL;
+        }
+        for offset in (0..length).step_by(4096) {
+            let count = (length - offset).min(4096);
+            if write {
+                unsafe {
+                    copy_nonoverlapping(buffer.add(offset), block.data_address as *mut u8, count);
+                }
+            }
+            let result = scoped_storage::io(
+                client,
+                block.device_id,
+                write,
+                lba + (offset / 512) as u64,
+                count,
+            );
+            if result != 0 {
+                return result;
+            }
+            if !write {
+                unsafe {
+                    copy_nonoverlapping(block.data_address as *const u8, buffer.add(offset), count);
+                }
+            }
+        }
+        return 0;
+    }
     let Some(request_end) = lba.checked_add((length / 512) as u64) else {
         return EINVAL;
     };
@@ -802,6 +873,15 @@ fn control_io(
 ) -> i32 {
     if length > MDRIVER_BLOCK_MAX_TRANSFER as usize {
         return EINVAL;
+    }
+    if block.device_id != 0 && block.device_id & 0x80000000 != 0 {
+        return scoped_storage::io(
+            client,
+            block.device_id,
+            operation == MDRIVER_CONTROL_BLOCK_WRITE,
+            lba,
+            length,
+        );
     }
     match transact(
         client,
