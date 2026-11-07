@@ -1224,6 +1224,7 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
         animation.stop();
     }
     drop(loading_animation);
+    boot_ui::finish_loading();
     let (_system_table, memory_map_iter) =
         unsafe { system_table.exit_boot_services(UefiMemType::LOADER_DATA) };
 

@@ -1,9 +1,9 @@
-use bootui::{ArcSpinnerStyle, Color, Image, PixelFormat, Point, Rect, Surface};
+use bootui::{Color, Image, LoadingScreen, PixelFormat, Point, Rect, Surface};
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use uefi::table::boot::{BootServices, EventType, TimerTrigger, Tpl};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use uefi::Event;
+use uefi::table::boot::{BootServices, EventType, TimerTrigger, Tpl};
 
 include!(concat!(env!("OUT_DIR"), "/boot_logo.rs"));
 
@@ -14,6 +14,8 @@ static HEIGHT: AtomicUsize = AtomicUsize::new(0);
 static STRIDE: AtomicUsize = AtomicUsize::new(0);
 static FORMAT: AtomicU8 = AtomicU8::new(0);
 static PHASE: AtomicU8 = AtomicU8::new(0);
+static START_TICKS: AtomicU64 = AtomicU64::new(0);
+static TICKS_PER_MILLISECOND: AtomicU64 = AtomicU64::new(0);
 static RENDERING: AtomicBool = AtomicBool::new(false);
 
 pub fn initialize(
@@ -50,32 +52,20 @@ pub fn initialize(
 
 pub fn show_loading() {
     let _ = with_surface(|surface| {
-        surface.clear(Color::BLACK);
-        let Ok(logo) = Image::new(
+        if let Ok(logo) = Image::new(
             BOOT_LOGO_RGBA,
             BOOT_LOGO_WIDTH,
             BOOT_LOGO_HEIGHT,
             BOOT_LOGO_WIDTH as usize * 4,
-        ) else {
-            return;
-        };
-        let longest = (surface.width() / 8).min(surface.height() / 8).max(1);
-        let source_longest = BOOT_LOGO_WIDTH.max(BOOT_LOGO_HEIGHT);
-        let width =
-            (u64::from(BOOT_LOGO_WIDTH) * u64::from(longest) / u64::from(source_longest)) as u32;
-        let height =
-            (u64::from(BOOT_LOGO_HEIGHT) * u64::from(longest) / u64::from(source_longest)) as u32;
-        let x = i64::from(surface.width()) / 2 - i64::from(width) / 2;
-        let y = i64::from(surface.height()) * 38 / 100 - i64::from(height) / 2;
-        surface.draw_image_scaled(
-            logo,
-            Rect::new(to_i32(x), to_i32(y), width.max(1), height.max(1)),
-        );
-        draw_spinner(surface, 0);
+        ) {
+            LoadingScreen::new(logo).paint(surface, 0);
+            PHASE.store(0, Ordering::Relaxed);
+        }
     });
 }
 
 pub fn show_error() {
+    TICKS_PER_MILLISECOND.store(0, Ordering::Release);
     let _ = with_surface(|surface| {
         surface.clear(Color::BLACK);
         let card_width = surface.width().min(520).saturating_sub(32).max(180);
@@ -123,20 +113,25 @@ impl Drop for LoadingAnimation<'_> {
 }
 
 pub fn start_loading_animation(boot_services: &BootServices) -> Option<LoadingAnimation<'_>> {
+    let start = read_ticks();
+    boot_services.stall(10_000);
+    let end = read_ticks();
+    START_TICKS.store(end, Ordering::Relaxed);
+    TICKS_PER_MILLISECOND.store(end.saturating_sub(start).max(10) / 10, Ordering::Release);
     unsafe extern "efiapi" fn tick(_event: Event, _context: Option<NonNull<c_void>>) {
         advance_loading();
     }
     let event = unsafe {
         boot_services.create_event(
             EventType::TIMER | EventType::NOTIFY_SIGNAL,
-            Tpl::CALLBACK,
+            Tpl::NOTIFY,
             Some(tick),
             None,
         )
     }
     .ok()?;
     if boot_services
-        .set_timer(&event, TimerTrigger::Periodic(800_000))
+        .set_timer(&event, TimerTrigger::Periodic(333_333))
         .is_err()
     {
         let _ = boot_services.close_event(event);
@@ -148,33 +143,35 @@ pub fn start_loading_animation(boot_services: &BootServices) -> Option<LoadingAn
     })
 }
 
-/// Advances the loading indicator when firmware is busy in a synchronous
-/// operation and cannot dispatch timer events.
+/// Refreshes from elapsed time, so file reads cannot speed up the animation.
 pub fn advance_loading() {
-    let phase = PHASE.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let _ = with_surface(|surface| {
-        let center = spinner_center(surface);
-        surface.fill_rect(
-            Rect::new(center.x - 12, center.y - 12, 24, 24),
-            Color::BLACK,
-        );
-        draw_spinner(surface, phase);
+        let frequency = TICKS_PER_MILLISECOND.load(Ordering::Acquire);
+        if frequency == 0 {
+            return;
+        }
+        let elapsed = read_ticks().saturating_sub(START_TICKS.load(Ordering::Relaxed)) / frequency;
+        let phase = LoadingScreen::phase_at(elapsed);
+        if phase != PHASE.load(Ordering::Relaxed) {
+            LoadingScreen::paint_spinner(surface, elapsed);
+            PHASE.store(phase, Ordering::Relaxed);
+        }
     });
 }
 
-fn draw_spinner(surface: &mut Surface<'_>, phase: u8) {
-    surface.draw_arc_spinner(
-        spinner_center(surface),
-        phase,
-        ArcSpinnerStyle::new(8, 2, Color::rgb(244, 246, 250)),
-    );
+/// Leave the logo, without a frozen indicator, during the renderer handoff.
+pub fn finish_loading() {
+    TICKS_PER_MILLISECOND.store(0, Ordering::Release);
+    let _ = with_surface(LoadingScreen::clear_spinner);
 }
 
-fn spinner_center(surface: &Surface<'_>) -> Point {
-    Point::new(
-        i32::try_from(surface.width() / 2).unwrap_or(i32::MAX),
-        i32::try_from(surface.height() * 3 / 5).unwrap_or(i32::MAX),
-    )
+fn read_ticks() -> u64 {
+    // SAFETY: this x86_64 firmware code runs on the BSP; LFENCE orders the
+    // timestamp read. Calibration uses the firmware's Stall time source.
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    }
 }
 
 fn with_surface(draw: impl FnOnce(&mut Surface<'_>)) -> bool {
