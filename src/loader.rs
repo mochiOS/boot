@@ -1013,12 +1013,15 @@ unsafe fn load_initfs_slot(
 /// UEFI エントリーポイント
 #[entry]
 unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
+    if console::init().is_err() {
+        return Status::DEVICE_ERROR;
+    }
     if uefi::helpers::init(&mut system_table).is_err() {
         return Status::UNSUPPORTED;
     }
 
-    // GOP フレームバッファを最初に取得してコンソールを初期化
-    let (_fb_ptr, fb_addr, fb_size, screen_w, screen_h, stride, pixel_format) = {
+    // BootUI が使用する GOP フレームバッファを取得
+    let (fb_addr, fb_size, screen_w, screen_h, stride, pixel_format) = {
         let gop_handle = match system_table
             .boot_services()
             .get_handle_for_protocol::<GraphicsOutput>()
@@ -1044,15 +1047,8 @@ unsafe fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Sta
             PixelFormat::Bgr => bootui::PixelFormat::Bgr,
             PixelFormat::Bitmask | PixelFormat::BltOnly => return Status::UNSUPPORTED,
         };
-        console::CONSOLE.lock().init(fb_ptr, w, h, st);
-        (fb_ptr, fb_ptr as u64, fb_sz, w, h, st, pixel_format)
+        (fb_ptr as u64, fb_sz, w, h, st, pixel_format)
     };
-
-    *console::SERIAL.lock() = Some(console::SerialConsole::new(0x3F8));
-
-    if let Some(serial) = console::SERIAL.lock().as_mut() {
-        serial.init();
-    }
 
     if !boot_ui::initialize(
         fb_addr as usize,

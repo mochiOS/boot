@@ -306,6 +306,7 @@ version = "0.0.1-dev"
 dependencies = [
  "bootui",
  "linked_list_allocator",
+ "log",
  "mnu",
  "mnu-abi",
  "mochios-boot-selection",
@@ -770,6 +771,10 @@ name = "mochios-workspace-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
+name = "mboot-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
 name = "libc"
 version = "0.2.190"
 
@@ -780,10 +785,6 @@ version = "2.0.0"
 [[patch.unused]]
 name = "viewkit"
 version = "2.0.0"
-
-[[patch.unused]]
-name = "mboot-protocol"
-version = "0.1.0"
 
 [[patch.unused]]
 name = "libc"

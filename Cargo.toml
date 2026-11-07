@@ -78,7 +78,8 @@ require-secure-boot = []
 
 [dependencies]
 bootui = { path = "../libraries/bootui" }
-uefi = { version = "0.30", features = ["alloc", "logger", "global_allocator"], optional = true }
+uefi = { version = "0.30", default-features = false, features = ["alloc", "global_allocator"], optional = true }
+log = { version = "0.4", default-features = false }
 spin = "0.9.9"
 x86_64 = "0.15"
 linked_list_allocator = "0.10.5"
