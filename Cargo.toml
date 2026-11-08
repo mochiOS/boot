@@ -77,7 +77,7 @@ development-system-key = []
 require-secure-boot = []
 
 [dependencies]
-bootui = { path = "../libraries/bootui" }
+bootui = { git = "https://github.com/mochiOS/BootUI", rev = "4b0fca76023d9484d33a179946dc0fc5b770dd29" }
 uefi = { version = "0.30", default-features = false, features = ["alloc", "global_allocator"], optional = true }
 log = { version = "0.4", default-features = false }
 spin = "0.9.9"
