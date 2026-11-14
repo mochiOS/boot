@@ -3,6 +3,7 @@ ENTRY(domain_entry)
 SECTIONS
 {
     . = 0x10000;
+    __kernel_start = .;
 
     .text : ALIGN(4096)
     {
