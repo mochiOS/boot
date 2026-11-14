@@ -1,0 +1,74 @@
+{
+  "format": 1,
+  "steps": [
+    "mkdir -p $(MMAKE_OUT)/components",
+    "features=uefi-dep; if grep -qx 'DEVELOPMENT_SYSTEM_SIGNATURES=y' $(ROOT)/.config; then features=$features,development-system-key; fi; if grep -qx 'REQUIRE_UEFI_SECURE_BOOT=y' $(ROOT)/.config; then features=$features,require-secure-boot; fi; minimum_build=\"${MOCHIOS_MINIMUM_BUILD:-}\"; if grep -qx 'DEVELOPMENT_UEFI_SIGNING=y' $(ROOT)/.config; then minimum_build=\"${minimum_build:-1}\"; fi; case \"$minimum_build\" in ''|*[!0-9]*|0) echo 'MOCHIOS_MINIMUM_BUILD must be an explicit positive integer' >&2; exit 1;; esac; MOCHIOS_MINIMUM_BUILD=\"$minimum_build\" RUSTFLAGS='--cfg curve25519_dalek_backend=\"serial\"' cargo +nightly-2026-05-14 build --offline -Z build-std=core,alloc,compiler_builtins --release --target x86_64-unknown-uefi --target-dir $(MMAKE_OUT)/targets/bootloader --config \"patch.\\\"https://github.com/mochiOS/mnu\\\".mnu-abi.path='$(ROOT)/core/crates/abi'\" --config \"patch.\\\"https://github.com/mochiOS/mnu\\\".mnu.path='$(ROOT)/core'\" --manifest-path $(PROJECT)/Cargo.toml --features \"$features\"",
+    "if test -f $(MMAKE_OUT)/targets/bootloader/x86_64-unknown-uefi/release/boot.efi; then unsigned=$(MMAKE_OUT)/targets/bootloader/x86_64-unknown-uefi/release/boot.efi; else unsigned=$(MMAKE_OUT)/targets/bootloader/x86_64-unknown-uefi/release/boot; fi; command -v sbsign >/dev/null; command -v sbverify >/dev/null; if grep -qx 'DEVELOPMENT_UEFI_SIGNING=y' $(ROOT)/.config; then command -v openssl >/dev/null; key=$(MMAKE_OUT)/components/ovmf-development-key.pem; trap 'rm -f -- \"$key\"' EXIT; openssl pkey -in /usr/share/ovmf/PkKek-1-snakeoil.key -passin pass:snakeoil -out \"$key\" >/dev/null 2>&1; chmod 0600 \"$key\"; cert=/usr/share/ovmf/PkKek-1-snakeoil.pem; else key=\"${MOCHIOS_UEFI_SIGNING_KEY:-}\"; cert=\"${MOCHIOS_UEFI_SIGNING_CERT:-}\"; test -n \"$key\" -a -n \"$cert\" || { echo 'MOCHIOS_UEFI_SIGNING_KEY and MOCHIOS_UEFI_SIGNING_CERT are required' >&2; exit 1; }; fi; test -r \"$key\" -a -r \"$cert\"; sbsign --key \"$key\" --cert \"$cert\" --output $(MMAKE_OUT)/components/BOOTX64.EFI.new \"$unsigned\" >/dev/null; sbverify --cert \"$cert\" $(MMAKE_OUT)/components/BOOTX64.EFI.new >/dev/null; chmod 0644 $(MMAKE_OUT)/components/BOOTX64.EFI.new; mv $(MMAKE_OUT)/components/BOOTX64.EFI.new $(MMAKE_OUT)/components/BOOTX64.EFI",
+    "mkdir -p $(MMAKE_OUT)/components",
+    "cargo build --offline --release --manifest-path $(PROJECT)/crates/boot-selection/Cargo.toml --target-dir $(MMAKE_OUT)/targets/boot-selection-host --bin boot-selection-seed",
+    "install -m 0755 $(MMAKE_OUT)/targets/boot-selection-host/release/boot-selection-seed $(MMAKE_OUT)/components/boot-selection-seed",
+    "mkdir -p $(MMAKE_OUT)/components",
+    "cargo build --offline --release --manifest-path $(PROJECT)/crates/boot-selection/Cargo.toml --target-dir $(MMAKE_OUT)/targets/boot-selection-host --bin boot-selection-confirm-test",
+    "install -m 0755 $(MMAKE_OUT)/targets/boot-selection-host/release/boot-selection-confirm-test $(MMAKE_OUT)/components/boot-selection-confirm-test",
+    "mkdir -p $(MMAKE_OUT)/components",
+    "cargo build --offline --release --manifest-path $(PROJECT)/crates/boot-selection/Cargo.toml --target-dir $(MMAKE_OUT)/targets/boot-selection-host --bin boot-selection-gpt-probe",
+    "install -m 0755 $(MMAKE_OUT)/targets/boot-selection-host/release/boot-selection-gpt-probe $(MMAKE_OUT)/components/boot-selection-gpt-probe",
+    "cargo build --offline --release --manifest-path $(PROJECT)/Cargo.toml --target-dir $(MMAKE_OUT)/targets/system-image-host --package mochios-system-image --features std --bin system-image-sign",
+    "install -m 0755 $(MMAKE_OUT)/targets/system-image-host/release/system-image-sign $(MMAKE_OUT)/components/system-image-sign",
+    "cargo build --offline --release --manifest-path $(PROJECT)/Cargo.toml --target-dir $(MMAKE_OUT)/targets/system-image-host --package mochios-system-image --features std --bin system-slot-image",
+    "install -m 0755 $(MMAKE_OUT)/targets/system-image-host/release/system-slot-image $(MMAKE_OUT)/components/system-slot-image"
+  ],
+  "package": {
+    "name": "boot",
+    "version": "0.1.0",
+    "target": "x86_64-mochios",
+    "abi": "mochios-1"
+  },
+  "artifact": "out/mdp/boot.tar.mdp",
+  "exports": [
+    {
+      "source": "$(MMAKE_OUT)/components/BOOTX64.EFI",
+      "area": "boot",
+      "destination": "EFI/BOOT/BOOTX64.EFI"
+    },
+    {
+      "source": "config/kernel.conf",
+      "area": "initfs",
+      "destination": "config/kernel.conf"
+    },
+    {
+      "source": "$(MMAKE_OUT)/components/boot-selection-seed",
+      "area": "host-tools",
+      "destination": "boot-selection-seed",
+      "mode": 493
+    },
+    {
+      "source": "$(MMAKE_OUT)/components/boot-selection-confirm-test",
+      "area": "host-tools",
+      "destination": "boot-selection-confirm-test",
+      "mode": 493
+    },
+    {
+      "source": "$(MMAKE_OUT)/components/boot-selection-gpt-probe",
+      "area": "host-tools",
+      "destination": "boot-selection-gpt-probe",
+      "mode": 493
+    },
+    {
+      "source": "$(MMAKE_OUT)/components/system-image-sign",
+      "area": "host-tools",
+      "destination": "system-image-sign",
+      "mode": 493
+    },
+    {
+      "source": "$(MMAKE_OUT)/components/system-slot-image",
+      "area": "host-tools",
+      "destination": "system-slot-image",
+      "mode": 493
+    }
+  ],
+  "bindings": {
+    "SOURCE_BOOT": "$(PROJECT)",
+    "MMAKE_OUT": "$(PROJECT)/out/mdp/build"
+  }
+}

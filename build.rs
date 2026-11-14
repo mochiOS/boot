@@ -1,11 +1,11 @@
-#[path = "../scripts/mmake/build-boot-logo.rs"]
+#[path = "build-support/build-boot-logo.rs"]
 mod boot_logo;
 
 fn main() {
     let manifest_dir = std::path::PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("missing manifest dir"),
     );
-    boot_logo::generate(&manifest_dir.join("../resources/system/icons/mochimochi-kun.png"));
+    boot_logo::generate(&manifest_dir.join("build-support/mochimochi-kun.png"));
     println!("cargo:rerun-if-changed=domain.ld");
     if (std::env::var_os("CARGO_FEATURE_SYSTEM_DOMAIN").is_some()
         || std::env::var_os("CARGO_FEATURE_MDRIVER_PROBE").is_some()
