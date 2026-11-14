@@ -1,0 +1,7 @@
+format = 1
+
+[build]
+command = ["mdp", "pipeline", "--recipe", "mdp.hardware.recipe.json"]
+requires = ["context"]
+sources = ["kernel", "bootui-source"]
+artifact = "out/mdp/boot-hardware.tar.mdp"

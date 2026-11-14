@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "steps": [
+    "RUSTFLAGS='-C relocation-model=static -C link-arg=-no-pie --cfg curve25519_dalek_backend=\"serial\"' cargo +nightly-2026-05-14 build --offline -Z build-std=core,alloc --release --target x86_64-unknown-none --target-dir $(PROJECT)/out/mdp/hardware-target --manifest-path $(PROJECT)/Cargo.toml --no-default-features --features system-domain --bin mochios-system --config \"patch.\\\"https://github.com/mochiOS/mnu\\\".mnu.path='$(ROOT)/core'\" --config \"patch.\\\"https://github.com/mochiOS/mnu\\\".mnu-abi.path='$(ROOT)/core/crates/abi'\""
+  ],
+  "package": {"name": "boot-hardware", "version": "0.1.0", "target": "x86_64-mochios", "abi": "mochios-1"},
+  "artifact": "out/mdp/boot-hardware.tar.mdp",
+  "exports": [{"source": "out/mdp/hardware-target/x86_64-unknown-none/release/mochios-system", "area": "hardware-domains", "destination": "mochios-system"}]
+}
