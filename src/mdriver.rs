@@ -80,7 +80,7 @@ struct BlockState {
     capacity_sectors: u64,
     logical_block_size: u64,
     features: u64,
-    data_address: u64,
+    data_address: u64, // Domain GPA; convert only at a CPU memory access.
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,7 +101,7 @@ pub struct DisplayInfo {
 struct DisplayState {
     device_id: u32,
     info: DisplayInfo,
-    data_address: u64,
+    data_address: u64, // Domain GPA, also used by grants and userspace mapping.
     max_transfer: usize,
     shared_surface: bool,
 }
@@ -124,7 +124,7 @@ struct BlockCandidate {
 }
 
 struct Client {
-    ring_address: u64,
+    ring_address: u64, // Domain GPA, never an implicitly dereferenceable pointer.
     request_id: u64,
     poisoned: bool,
     capabilities: u64,
@@ -161,7 +161,7 @@ struct ClientLease<'a> {
 impl ClientStore {
     fn lock(&self) -> ClientLease<'_> {
         loop {
-            let value = x86_64::instructions::interrupts::without_interrupts(|| {
+            let value = mnu::arch::interrupts::without_interrupts(|| {
                 let mut slot = self.0.lock();
                 if !slot.borrowed {
                     slot.borrowed = true;
@@ -203,7 +203,7 @@ impl core::ops::DerefMut for ClientLease<'_> {
 
 impl Drop for ClientLease<'_> {
     fn drop(&mut self) {
-        x86_64::instructions::interrupts::without_interrupts(|| {
+        mnu::arch::interrupts::without_interrupts(|| {
             let waiters = {
                 let mut slot = self.store.0.lock();
                 slot.value = self.value.take();
@@ -237,6 +237,27 @@ fn initialize_client() -> Result<(), Error> {
     *INIT.call_once(connect_client)
 }
 
+/// Access only the Domain's retained grant RAM through its kernel linear map.
+/// Hypercalls and wire messages continue to receive GPAs, not kernel pointers.
+fn grant_pointer(address: u64, length: usize) -> Result<*mut u8, Error> {
+    let (start, size) = hypervisor_guest::grant_window().ok_or(Error::MissingGrantWindow)?;
+    let end = address.checked_add(length as u64).ok_or(Error::Protocol)?;
+    let limit = start.checked_add(size).ok_or(Error::Protocol)?;
+    if length == 0 || address < start || end > limit {
+        return Err(Error::Protocol);
+    }
+    let offset = mnu::mem::paging::physical_memory_offset().ok_or(Error::MissingGrantWindow)?;
+    let mapped = offset.checked_add(address).ok_or(Error::Protocol)?;
+    let last = mapped.checked_add(length as u64 - 1).ok_or(Error::Protocol)?;
+    if mnu::arch::memory::VirtAddr::try_new(mapped).is_err()
+        || mnu::arch::memory::VirtAddr::try_new(last).is_err()
+        || mapped >> 63 != last >> 63
+    {
+        return Err(Error::Protocol);
+    }
+    Ok(mapped as *mut u8)
+}
+
 fn connect_client() -> Result<(), Error> {
     if hypervisor_guest::feature_flags() & REQUIRED_FEATURES != REQUIRED_FEATURES {
         return Err(Error::Unsupported);
@@ -252,7 +273,11 @@ fn connect_client() -> Result<(), Error> {
     handshake_port(MDRIVER_CONTROL_PORT)?;
     handshake_port(MDRIVER_CONTROL_IRQ_PORT)?;
 
-    let ring = grant_start as *mut SharedRingPage;
+    let ring = grant_pointer(grant_start, core::mem::size_of::<SharedRingPage>())?
+        .cast::<SharedRingPage>();
+    if ring as usize % core::mem::align_of::<SharedRingPage>() != 0 {
+        return Err(Error::Protocol);
+    }
     unsafe { initialize(ring, MDRIVER_CONTROL_RING_GENERATION) };
     let ring_reference = hypervisor_guest::invoke(
         HypercallNumber::GrantCreate,
@@ -516,9 +541,10 @@ fn install_metadata_reference(client: &mut Client) -> Result<u32, Error> {
         .filter(|bytes| bytes.len() == 32)
         .ok_or(Error::Protocol)?;
     let address = client.ring_address + MDRIVER_INSTALL_METADATA_PAGE * 4096;
+    let mapped = grant_pointer(address, 4096)?;
     unsafe {
-        core::ptr::write_bytes(address as *mut u8, 0, 4096);
-        copy_nonoverlapping(digest.as_ptr(), address as *mut u8, digest.len());
+        core::ptr::write_bytes(mapped, 0, 4096);
+        copy_nonoverlapping(digest.as_ptr(), mapped, digest.len());
     }
     if let Some(reference) = client.install_metadata_reference {
         return Ok(reference);
@@ -603,7 +629,11 @@ fn transact_inner(
     client.request_id = client.request_id.checked_add(1).ok_or(Error::Protocol)?;
     let message = SharedRingMessage::new(MDRIVER_CONTROL_REQUEST_KIND, 0, id, &request.encode())
         .map_err(|_| Error::Ring)?;
-    let ring = client.ring_address as *mut SharedRingPage;
+    let ring = grant_pointer(client.ring_address, core::mem::size_of::<SharedRingPage>())?
+        .cast::<SharedRingPage>();
+    if ring as usize % core::mem::align_of::<SharedRingPage>() != 0 {
+        return Err(Error::Protocol);
+    }
     unsafe { push_request(ring, message) }.map_err(|_| Error::Ring)?;
     if hypervisor_guest::invoke(
         HypercallNumber::EventSend,
@@ -764,6 +794,10 @@ unsafe fn transfer(
     if client.poisoned {
         return EIO;
     }
+    let shared = match grant_pointer(block.data_address, MDRIVER_BLOCK_MAX_TRANSFER as usize) {
+        Ok(pointer) => pointer,
+        Err(_) => return EIO,
+    };
     if block.device_id & 0x80000000 != 0 {
         if lba
             .checked_add((length / 512) as u64)
@@ -775,7 +809,7 @@ unsafe fn transfer(
             let count = (length - offset).min(4096);
             if write {
                 unsafe {
-                    copy_nonoverlapping(buffer.add(offset), block.data_address as *mut u8, count);
+                    copy_nonoverlapping(buffer.add(offset), shared, count);
                 }
             }
             let result = scoped_storage::io(
@@ -790,7 +824,7 @@ unsafe fn transfer(
             }
             if !write {
                 unsafe {
-                    copy_nonoverlapping(block.data_address as *const u8, buffer.add(offset), count);
+                    copy_nonoverlapping(shared, buffer.add(offset), count);
                 }
             }
         }
@@ -836,7 +870,7 @@ unsafe fn transfer(
             unsafe {
                 copy_nonoverlapping(
                     buffer.add(caller_offset),
-                    (block.data_address as *mut u8).add(shared_offset),
+                    shared.add(shared_offset),
                     copy_length,
                 )
             };
@@ -853,7 +887,7 @@ unsafe fn transfer(
         } else {
             unsafe {
                 copy_nonoverlapping(
-                    (block.data_address as *const u8).add(shared_offset),
+                    shared.add(shared_offset),
                     buffer.add(caller_offset),
                     copy_length,
                 )
@@ -1115,10 +1149,11 @@ pub fn present_display(
     {
         return Err(Error::Protocol);
     }
+    let mapped = grant_pointer(display.data_address, pixels.len())?;
     unsafe {
         copy_nonoverlapping(
             pixels.as_ptr(),
-            display.data_address as *mut u8,
+            mapped,
             pixels.len(),
         )
     };
