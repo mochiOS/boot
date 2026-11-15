@@ -5,11 +5,11 @@ use core::mem::size_of;
 use mnu::mem::allocator::HardenedKernelHeap;
 use mnu::{
     BootInfo, MemoryRegion, MemoryType, BOOT_FEATURE_FRAMEBUFFER, BOOT_FEATURE_HYPERVISOR_DOMAIN,
-    BOOT_FEATURE_INITFS,
+    BOOT_FEATURE_INITFS, BOOT_FEATURE_ARM64_INTERRUPTS,
 };
 use mnu_abi::hypervisor::{
     DomainBootInfo, HypercallNumber, DOMAIN_FEATURE_FRAMEBUFFER, DOMAIN_ROLE_SYSTEM,
-    HYPERCALL_SUCCESS,
+    HYPERCALL_SUCCESS, DOMAIN_FEATURE_VIRTUAL_GIC,
 };
 
 mod mdriver;
@@ -75,6 +75,10 @@ pub unsafe extern "sysv64" fn domain_entry(domain_info_ptr: *const DomainBootInf
         KERNEL_BOOT_INFO.cpu_id_count = 1;
         KERNEL_BOOT_INFO.entropy_seed = domain_info.entropy_seed;
         KERNEL_BOOT_INFO.entropy_seed_valid = domain_info.entropy_seed_valid;
+        if domain_info.feature_flags & DOMAIN_FEATURE_VIRTUAL_GIC != 0 {
+            KERNEL_BOOT_INFO.feature_flags |= BOOT_FEATURE_ARM64_INTERRUPTS;
+            KERNEL_BOOT_INFO.arm64_interrupts = domain_info.arm64_interrupts;
+        }
         if domain_info.feature_flags & DOMAIN_FEATURE_FRAMEBUFFER != 0 {
             let framebuffer_base = domain_info.framebuffer_addr & !0xfff;
             let framebuffer_offset = domain_info.framebuffer_addr - framebuffer_base;
