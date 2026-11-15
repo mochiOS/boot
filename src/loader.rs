@@ -394,8 +394,8 @@ unsafe fn populate_cpu_info(bt: &BootServices) {
             println!("MpServices unavailable; assuming single CPU");
             BOOT_INFO.cpu_total = 1;
             BOOT_INFO.cpu_enabled = 1;
-            BOOT_INFO.bsp_apic_id = 0;
-            BOOT_INFO.cpu_apic_id_count = 0;
+            BOOT_INFO.bsp_hardware_id = 0;
+            BOOT_INFO.cpu_id_count = 0;
             return;
         }
     };
@@ -418,7 +418,7 @@ unsafe fn populate_cpu_info(bt: &BootServices) {
 
     BOOT_INFO.cpu_total = counts.total as u32;
     BOOT_INFO.cpu_enabled = counts.enabled as u32;
-    BOOT_INFO.cpu_apic_id_count = 0;
+    BOOT_INFO.cpu_id_count = 0;
     let cpu_total = BOOT_INFO.cpu_total;
     let cpu_enabled = BOOT_INFO.cpu_enabled;
     println!("CPU topology: total={} enabled={}", cpu_total, cpu_enabled);
@@ -426,20 +426,19 @@ unsafe fn populate_cpu_info(bt: &BootServices) {
     let total = core::cmp::min(counts.total, MAX_CPU_IDS);
     for index in 0..total {
         if let Ok(info) = mp.get_processor_info(index) {
-            if index < MAX_CPU_IDS {
-                BOOT_INFO.cpu_apic_ids[index] = info.processor_id as u32;
-                BOOT_INFO.cpu_apic_id_count = BOOT_INFO.cpu_apic_id_count.saturating_add(1);
-            }
+            let slot = BOOT_INFO.cpu_id_count as usize;
+            BOOT_INFO.cpu_hardware_ids[slot] = info.processor_id;
+            BOOT_INFO.cpu_id_count += 1;
             if info.is_bsp() {
-                BOOT_INFO.bsp_apic_id = info.processor_id as u32;
+                BOOT_INFO.bsp_hardware_id = info.processor_id;
             }
         }
     }
-    let bsp_apic_id = BOOT_INFO.bsp_apic_id;
-    let cpu_apic_id_count = BOOT_INFO.cpu_apic_id_count;
+    let bsp_hardware_id = BOOT_INFO.bsp_hardware_id;
+    let cpu_id_count = BOOT_INFO.cpu_id_count;
     println!(
-        "BSP APIC ID={} APIC list count={}",
-        bsp_apic_id, cpu_apic_id_count
+        "BSP hardware ID={:#x} CPU list count={}",
+        bsp_hardware_id, cpu_id_count
     );
 }
 
