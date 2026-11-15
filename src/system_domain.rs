@@ -14,6 +14,10 @@ use mnu_abi::hypervisor::{
 
 mod mdriver;
 
+#[cfg(target_arch = "aarch64")]
+#[path = "arch/aarch64/system_domain.rs"]
+mod native;
+
 unsafe extern "C" {
     static __kernel_end: u8;
 }
@@ -43,6 +47,7 @@ static mut KERNEL_BOOT_INFO: BootInfo = BootInfo::empty();
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.domain_entry")]
+#[cfg(target_arch = "x86_64")]
 pub unsafe extern "sysv64" fn domain_entry(domain_info_ptr: *const DomainBootInfo) -> ! {
     let kernel_reserved_end = core::ptr::addr_of!(__kernel_end) as u64;
     let Some(domain_info) = (unsafe { domain_info_ptr.as_ref() }) else {
@@ -107,7 +112,5 @@ pub unsafe extern "sysv64" fn domain_entry(domain_info_ptr: *const DomainBootInf
 }
 
 fn halt() -> ! {
-    loop {
-        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) }
-    }
+    mnu::arch::halt()
 }
