@@ -53,6 +53,9 @@ pub unsafe extern "sysv64" fn domain_entry(domain_info_ptr: *const DomainBootInf
     let Some(domain_info) = (unsafe { domain_info_ptr.as_ref() }) else {
         halt()
     };
+    // Retain advertised platform facilities, including optional UTC, without
+    // mapping their firmware controllers into this Domain. Device ownership
+    // stays with the frontend that supplied the validated handoff.
     if domain_info.validate().is_err()
         || domain_info.domain_role != DOMAIN_ROLE_SYSTEM
         || domain_info.boot_module_start < kernel_reserved_end
