@@ -84,6 +84,9 @@ pub unsafe extern "sysv64" fn domain_entry(domain_info_ptr: *const DomainBootInf
             KERNEL_BOOT_INFO.feature_flags |= BOOT_FEATURE_ARM64_INTERRUPTS;
             KERNEL_BOOT_INFO.arm64_interrupts = domain_info.arm64_interrupts;
         }
+        // Firmware scanout addresses belong to the assigned guest device
+        // window. They are GPAs, not EL1 virtual pointers or host addresses;
+        // the VMM retains ownership of the physical firmware controller.
         if domain_info.feature_flags & DOMAIN_FEATURE_FRAMEBUFFER != 0 {
             let framebuffer_base = domain_info.framebuffer_addr & !0xfff;
             let framebuffer_offset = domain_info.framebuffer_addr - framebuffer_base;
