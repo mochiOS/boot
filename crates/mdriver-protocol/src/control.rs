@@ -69,6 +69,9 @@ pub const MDRIVER_DEVICE_STATE_ONLINE: u64 = 1;
 pub const MDRIVER_DEVICE_FEATURE_DMA_ISOLATED: u64 = 1 << 0;
 pub const MDRIVER_DEVICE_FEATURE_INTERRUPT_ACTIVE: u64 = 1 << 1;
 pub const MDRIVER_DEVICE_FEATURE_PHYSICAL: u64 = 1 << 2;
+/// Software-backed device with no physical requester or DMA assignment.
+/// Its DESCRIBE identity field must not be interpreted as PCI coordinates.
+pub const MDRIVER_DEVICE_FEATURE_SOFTWARE: u64 = 1 << 32;
 pub const MDRIVER_DEVICE_FEATURE_EPHEMERAL: u64 = 1 << 3;
 pub const MDRIVER_DEVICE_FEATURE_READ_ONLY: u64 = 1 << 4;
 pub const MDRIVER_DEVICE_FEATURE_PARTITIONED: u64 = 1 << 5;
