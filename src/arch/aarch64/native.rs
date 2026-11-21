@@ -13,13 +13,17 @@ use core::mem::size_of;
 use mboot::fdt::{gic::GicV2, memory::MemoryMap, timer::Timers, Fdt};
 use mnu::arch::gic::NativeTimer;
 use mnu::mem::allocator::HardenedKernelHeap;
-use mnu::{BootInfo, MemoryRegion, MemoryType, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_INITFS};
+use mnu::{
+    BootInfo, MemoryRegion, MemoryType, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_FRAMEBUFFER,
+    BOOT_FEATURE_INITFS,
+};
 use mnu_abi::hypervisor::{
     DomainBootInfo, DOMAIN_BOOT_MAGIC, DOMAIN_BOOT_VERSION, HYPERVISOR_BACKEND_ARM_EL2,
 };
 
 #[cfg(arm64_boot_disk)]
 mod boot_disk;
+mod boot_framebuffer;
 #[cfg(arm64_boot_disk)]
 mod boot_rtc;
 
@@ -46,18 +50,12 @@ unsafe extern "C" {
 #[global_allocator]
 static KERNEL_ALLOCATOR: HardenedKernelHeap = HardenedKernelHeap::empty();
 static mut BOOT_INFO: BootInfo = BootInfo::empty();
-static mut BOOT_MEMORY: [MemoryRegion; 2] = [
-    MemoryRegion {
-        start: 0,
-        len: 0,
-        region_type: MemoryType::KernelImage,
-    },
-    MemoryRegion {
-        start: 0,
-        len: 0,
-        region_type: MemoryType::Usable,
-    },
-];
+const EMPTY_REGION: MemoryRegion = MemoryRegion {
+    start: 0,
+    len: 0,
+    region_type: MemoryType::Reserved,
+};
+static mut BOOT_MEMORY: [MemoryRegion; 3] = [EMPTY_REGION; 3];
 
 #[cfg(arm64_boot_module)]
 static BOOT_MODULE: &[u8] = include_bytes!(env!("MOCHIOS_ARM64_BOOT_MODULE"));
@@ -109,21 +107,48 @@ extern "C" fn __mnu_arm64_native_entry(base: u64, size: u64, dtb_len: usize) -> 
     #[cfg(arm64_boot_disk)]
     boot_rtc::prepare(&tree, &map);
 
+    let framebuffer = boot_framebuffer::admit(&tree, &map, base, end);
+    let mut memory = [
+        MemoryRegion {
+            start: base,
+            len: used,
+            region_type: MemoryType::KernelImage,
+        },
+        MemoryRegion {
+            start: base + used,
+            len: size - used,
+            region_type: MemoryType::Usable,
+        },
+        EMPTY_REGION,
+    ];
+    let memory_count = if let Some(fb) = framebuffer {
+        memory[2] = fb.memory_region();
+        memory.sort_unstable_by_key(|region| region.start);
+        3
+    } else {
+        2
+    };
+
     let hardware_id = mnu::percpu::hardware_id();
     // SAFETY: Entry admitted a single CPU, sized this span against its PA
     // width, and retained it in TTBR1. Only the part beyond the linked kernel
     // can enter the allocator. The firmware Image protocol owns that span.
     let info = unsafe {
-        BOOT_MEMORY[0].start = base;
-        BOOT_MEMORY[0].len = used;
-        BOOT_MEMORY[1].start = base + used;
-        BOOT_MEMORY[1].len = size - used;
+        BOOT_MEMORY = memory;
         BOOT_INFO.physical_memory_offset = KERNEL_MAP_OFFSET - base;
         BOOT_INFO.memory_map_addr = core::ptr::addr_of!(BOOT_MEMORY) as u64;
-        BOOT_INFO.memory_map_len = 2;
+        BOOT_INFO.memory_map_len = memory_count;
         BOOT_INFO.kernel_heap_addr = core::ptr::addr_of!(KERNEL_ALLOCATOR) as u64;
         BOOT_INFO.bsp_hardware_id = hardware_id;
         BOOT_INFO.cpu_hardware_ids[0] = hardware_id;
+        if let Some(fb) = framebuffer {
+            BOOT_INFO.framebuffer_addr = fb.base;
+            BOOT_INFO.framebuffer_size = fb.bytes;
+            BOOT_INFO.screen_width = fb.width;
+            BOOT_INFO.screen_height = fb.height;
+            BOOT_INFO.stride = fb.stride;
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_FRAMEBUFFER;
+        }
         if !BOOT_MODULE.is_empty() {
             // The linker's read-only segment pins the complete boot module.
             BOOT_INFO.initfs_addr = BOOT_MODULE.as_ptr() as u64;
