@@ -23,6 +23,13 @@ test = false
 bench = false
 
 [[bin]]
+name = "mochios-native"
+path = "src/arch/aarch64/native.rs"
+required-features = ["arm64-native"]
+test = false
+bench = false
+
+[[bin]]
 name = "mdriver-probe"
 path = "src/domain_probe.rs"
 required-features = ["mdriver-probe"]
@@ -68,6 +75,7 @@ bench = false
 default = ["uefi-dep"]
 uefi-dep = ["dep:uefi"]
 system-domain = ["dep:mnu"]
+arm64-native = ["dep:mnu", "dep:mboot"]
 mdriver-probe = []
 domain-probes = []
 kcfi = []
@@ -85,6 +93,7 @@ linked_list_allocator = "0.10.5"
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 mnu-abi = { git = "https://github.com/mochiOS/mnu", package = "mnu-abi" }
 mnu = { git = "https://github.com/mochiOS/mnu", default-features = false, optional = true }
+mboot = { git = "https://github.com/mochiOS/mBoot", rev = "c74b9f9b936428563f51c1f5830cbee57bdc53c2", optional = true }
 mochios-mdriver-protocol = { path = "crates/mdriver-protocol" }
 mochios-boot-selection = { path = "crates/boot-selection" }
 mochios-system-image = { path = "crates/system-image" }

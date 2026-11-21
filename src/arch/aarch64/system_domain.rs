@@ -7,6 +7,7 @@ const MAX_BOOT_RAM: u64 = 1 << 30;
 
 core::arch::global_asm!(
     include_str!("entry.S"),
+    native_image = const 0,
     boot_magic = const mnu_abi::hypervisor::DOMAIN_BOOT_MAGIC,
     boot_version = const mnu_abi::hypervisor::DOMAIN_BOOT_VERSION,
     boot_size = const size_of::<DomainBootInfo>(),

@@ -12,7 +12,7 @@ PHDRS {
     stack PT_GNU_STACK FLAGS(6);
 }
 SECTIONS {
-    . = 0x10000;
+    . = DEFINED(NATIVE_IMAGE) ? 0 : 0x10000;
     .head : {
         KEEP(*(.text.arm64_entry))
     } :head
@@ -39,14 +39,18 @@ SECTIONS {
         . = ALIGN(4096);
     } :data
     .bss (NOLOAD) : AT(ADDR(.bss) - KERNEL_MAP_OFFSET) {
+        __bss_start = .;
         KEEP(*(.bss.arm64_tables))
         KEEP(*(.bss.arm64_stack))
+        KEEP(*(.bss.arm64_dtb))
         *(.bss .bss.*)
         *(COMMON)
         . = ALIGN(4096);
     } :data
     __kernel_end = .;
     __kernel_physical_end = __kernel_end - KERNEL_MAP_OFFSET;
+    __bss_physical_start = __bss_start - KERNEL_MAP_OFFSET;
+    __native_image_size = ALIGN(__kernel_physical_end + 32M, 2M);
     __text_physical_start = __text_start - KERNEL_MAP_OFFSET;
     __text_physical_end = __text_end - KERNEL_MAP_OFFSET;
     __rodata_physical_start = __rodata_start - KERNEL_MAP_OFFSET;
@@ -54,6 +58,7 @@ SECTIONS {
     __boot_tables_physical = __arm64_boot_tables - KERNEL_MAP_OFFSET;
     __boot_stack_physical_end = __arm64_boot_stack_end - KERNEL_MAP_OFFSET;
     ASSERT(__kernel_physical_end <= 0x40000000, "ARM bootstrap exceeds assigned RAM limit")
+    ASSERT(!DEFINED(NATIVE_IMAGE) || __native_image_size <= 0x40000000, "ARM Image exceeds bootstrap RAM limit")
     /DISCARD/ : {
         *(.eh_frame .eh_frame_hdr .comment .note .note.*)
     }

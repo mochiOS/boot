@@ -246,6 +246,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
+name = "mboot"
+version = "0.1.0"
+source = "git+https://github.com/mochiOS/mBoot?rev=c74b9f9b936428563f51c1f5830cbee57bdc53c2#c74b9f9b936428563f51c1f5830cbee57bdc53c2"
+dependencies = [
+ "bootui",
+ "mnu-abi",
+ "png",
+ "sha2",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -307,6 +318,7 @@ dependencies = [
  "bootui",
  "linked_list_allocator",
  "log",
+ "mboot",
  "mnu",
  "mnu-abi",
  "mochios-boot-selection",
@@ -703,8 +715,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[patch.unused]]
-name = "ext4plus"
-version = "0.1.0-rc.2"
+name = "libc"
+version = "0.2.190"
 
 [[patch.unused]]
 name = "libc"
@@ -713,6 +725,18 @@ version = "0.2.190"
 [[patch.unused]]
 name = "viewkit"
 version = "2.0.0"
+
+[[patch.unused]]
+name = "mboot-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "ext4plus"
+version = "0.1.0-rc.2"
+
+[[patch.unused]]
+name = "plugkit"
+version = "0.1.0"
 
 [[patch.unused]]
 name = "mochi-user-newlib-runtime"
@@ -835,20 +859,8 @@ name = "mochios-workspace-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "plugkit"
+name = "mochios-fonts"
 version = "0.1.0"
-
-[[patch.unused]]
-name = "libc"
-version = "0.2.190"
-
-[[patch.unused]]
-name = "mboot-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "viewkit"
-version = "2.0.0"
 
 [[patch.unused]]
 name = "mochios-appcore"
@@ -867,5 +879,5 @@ name = "mochios-linker-driver"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "mochios-fonts"
-version = "0.1.0"
+name = "viewkit"
+version = "2.0.0"
