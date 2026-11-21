@@ -12,6 +12,17 @@ fn main() {
         && std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64")
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none")
     {
+        println!("cargo:rustc-check-cfg=cfg(arm64_boot_module)");
+        println!("cargo:rerun-if-env-changed=MOCHIOS_ARM64_BOOT_MODULE");
+        if let Some(path) = std::env::var_os("MOCHIOS_ARM64_BOOT_MODULE") {
+            let path = std::fs::canonicalize(path).expect("ARM64 boot module is missing");
+            println!("cargo:rerun-if-changed={}", path.display());
+            println!(
+                "cargo:rustc-env=MOCHIOS_ARM64_BOOT_MODULE={}",
+                path.display()
+            );
+            println!("cargo:rustc-cfg=arm64_boot_module");
+        }
         println!("cargo:rustc-link-arg-bin=mochios-native=-zmax-page-size=4096");
         println!("cargo:rustc-link-arg-bin=mochios-native=--defsym=NATIVE_IMAGE=1");
         println!(

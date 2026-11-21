@@ -1,8 +1,7 @@
 //! Direct AArch64 Image entry for firmware that hands off at EL1.
 //!
 //! This bootstrap uses the loader-owned Image span to bring up mnu's VM.
-//! A board/frontend must supply interrupt and device ownership before the
-//! normal scheduler and userspace can start.
+//! The firmware supplies the device tree and owns the boot transaction.
 
 #![no_std]
 #![no_main]
@@ -11,9 +10,10 @@
 compile_error!("mochios-native requires aarch64-unknown-none");
 
 use core::mem::size_of;
-use mboot::fdt::{memory::MemoryMap, Fdt};
+use mboot::fdt::{gic::GicV2, memory::MemoryMap, timer::Timers, Fdt};
+use mnu::arch::gic::NativeTimer;
 use mnu::mem::allocator::HardenedKernelHeap;
-use mnu::{BootInfo, MemoryRegion, MemoryType, BOOT_FEATURE_ENTROPY};
+use mnu::{BootInfo, MemoryRegion, MemoryType, BOOT_FEATURE_ENTROPY, BOOT_FEATURE_INITFS};
 use mnu_abi::hypervisor::{
     DomainBootInfo, DOMAIN_BOOT_MAGIC, DOMAIN_BOOT_VERSION, HYPERVISOR_BACKEND_ARM_EL2,
 };
@@ -47,6 +47,11 @@ static mut BOOT_MEMORY: MemoryRegion = MemoryRegion {
     region_type: MemoryType::Usable,
 };
 
+#[cfg(arm64_boot_module)]
+static BOOT_MODULE: &[u8] = include_bytes!(env!("MOCHIOS_ARM64_BOOT_MODULE"));
+#[cfg(not(arm64_boot_module))]
+static BOOT_MODULE: &[u8] = &[];
+
 #[unsafe(no_mangle)]
 extern "C" fn __mnu_arm64_native_entry(base: u64, size: u64, dtb_len: usize) -> ! {
     let used = core::ptr::addr_of!(__kernel_end) as u64 - KERNEL_MAP_OFFSET;
@@ -79,6 +84,12 @@ extern "C" fn __mnu_arm64_native_entry(base: u64, size: u64, dtb_len: usize) -> 
     let Ok(seed) = tree.rng_seed() else {
         mnu::arch::halt();
     };
+    let Some(timer) = native_timer(&tree, &map) else {
+        mnu::arch::halt();
+    };
+    if !BOOT_MODULE.is_empty() && mnu_abi::boot_module::decode(BOOT_MODULE).is_err() {
+        mnu::arch::halt();
+    }
 
     let hardware_id = mnu::percpu::hardware_id();
     // SAFETY: Entry admitted a single CPU, sized this span against its PA
@@ -93,6 +104,12 @@ extern "C" fn __mnu_arm64_native_entry(base: u64, size: u64, dtb_len: usize) -> 
         BOOT_INFO.kernel_heap_addr = core::ptr::addr_of!(KERNEL_ALLOCATOR) as u64;
         BOOT_INFO.bsp_hardware_id = hardware_id;
         BOOT_INFO.cpu_hardware_ids[0] = hardware_id;
+        if !BOOT_MODULE.is_empty() {
+            // The linker's read-only segment pins the complete boot module.
+            BOOT_INFO.initfs_addr = BOOT_MODULE.as_ptr() as u64;
+            BOOT_INFO.initfs_size = BOOT_MODULE.len() as u64;
+            BOOT_INFO.feature_flags |= BOOT_FEATURE_INITFS;
+        }
         if let Some(seed) = seed {
             BOOT_INFO.entropy_seed = seed;
             BOOT_INFO.entropy_seed_valid = 1;
@@ -100,5 +117,42 @@ extern "C" fn __mnu_arm64_native_entry(base: u64, size: u64, dtb_len: usize) -> 
         }
         &*core::ptr::addr_of!(BOOT_INFO)
     };
+    // SAFETY: The AArch64 Image handoff gives this non-secure boot CPU the
+    // assigned controller. The DTB validated both register banks outside RAM.
+    if unsafe { mnu::arch::gic::install_native_timer(timer) }.is_err() {
+        mnu::arch::halt();
+    }
     mnu::kernel_entry(info)
+}
+
+fn native_timer(tree: &Fdt<'_>, map: &MemoryMap<'_>) -> Option<NativeTimer> {
+    let gic = GicV2::from_fdt(tree).ok()?;
+    let timers = Timers::from_fdt(tree, &gic).ok()?;
+    for range in [gic.distributor, gic.cpu] {
+        if range.size() < 4096
+            || map
+                .ram()
+                .iter()
+                .any(|ram| ram.start() < range.end() && range.start() < ram.end())
+        {
+            return None;
+        }
+    }
+    let counter_frequency: u64;
+    // SAFETY: The entry checked EL1. CNTFRQ is a read-only architectural value.
+    unsafe {
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) counter_frequency,
+            options(nomem, nostack, preserves_flags));
+    }
+    if timers
+        .counter_frequency
+        .is_some_and(|hz| u64::from(hz) != counter_frequency)
+    {
+        return None;
+    }
+    Some(NativeTimer {
+        distributor: gic.distributor.start(),
+        cpu_interface: gic.cpu.start(),
+        interrupt: u32::from(timers.virtual_timer.id),
+    })
 }
