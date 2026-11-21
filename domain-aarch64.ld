@@ -50,7 +50,8 @@ SECTIONS {
     __kernel_end = .;
     __kernel_physical_end = __kernel_end - KERNEL_MAP_OFFSET;
     __bss_physical_start = __bss_start - KERNEL_MAP_OFFSET;
-    __native_image_size = ALIGN(__kernel_physical_end + 32M, 2M);
+    __native_free_ram = DEFINED(NATIVE_FREE_RAM) ? NATIVE_FREE_RAM : 32M;
+    __native_image_size = ALIGN(__kernel_physical_end + __native_free_ram, 2M);
     __text_physical_start = __text_start - KERNEL_MAP_OFFSET;
     __text_physical_end = __text_end - KERNEL_MAP_OFFSET;
     __rodata_physical_start = __rodata_start - KERNEL_MAP_OFFSET;

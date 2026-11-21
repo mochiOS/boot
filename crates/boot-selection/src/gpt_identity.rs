@@ -96,7 +96,7 @@ fn scan_gpt<R, F>(
     reader: &mut R,
     disk_sectors: u64,
     mut visit: F,
-) -> Result<(), MatchError<R::Error>>
+) -> Result<GptHeader, MatchError<R::Error>>
 where
     R: SectorReader,
     F: FnMut(u32, &[u8]) -> Result<(), MatchError<R::Error>>,
@@ -189,7 +189,7 @@ where
     if entry_fill != 0 || entry_index != header.entry_count || !table_crc != header.table_crc {
         return Err(MatchError::InvalidGpt);
     }
-    Ok(())
+    Ok(header)
 }
 
 /// Searches one disk. The caller must enumerate every disk and reject zero or
@@ -220,6 +220,45 @@ pub fn find_boot_esp<R: SectorReader>(
         Ok(())
     })?;
     Ok(matched)
+}
+
+/// Admit the writable partition of a legacy boot disk with exactly one System
+/// and one Data partition. Metadata and all other sectors stay read-only.
+pub fn legacy_data_partition<R: SectorReader>(
+    reader: &mut R,
+    disk_sectors: u64,
+) -> Result<PartitionRange, MatchError<R::Error>> {
+    let mut system = None;
+    let mut data = None;
+    let header = scan_gpt(reader, disk_sectors, |index, entry| {
+        let target = match canonical_guid(&entry[..16]) {
+            SYSTEM_TYPE_GUID => &mut system,
+            DATA_TYPE_GUID if le64(&entry[48..56]) & (1 << 60) == 0 => &mut data,
+            _ => return Err(MatchError::InvalidGpt),
+        };
+        if target.is_some() {
+            return Err(MatchError::Ambiguous);
+        }
+        *target = Some(PartitionRange {
+            partition_index: index,
+            first_lba: le64(&entry[32..40]),
+            last_lba: le64(&entry[40..48]),
+        });
+        Ok(())
+    })?;
+    let (Some(system), Some(data)) = (system, data) else {
+        return Err(MatchError::InvalidGpt);
+    };
+    if system.first_lba <= data.last_lba && data.first_lba <= system.last_lba {
+        return Err(MatchError::InvalidGpt);
+    }
+    if disk_sectors
+        .checked_sub(1 + header.table_sectors)
+        .is_none_or(|backup_table| header.last_usable >= backup_table)
+    {
+        return Err(MatchError::InvalidGpt);
+    }
+    Ok(data)
 }
 
 fn partition_name_eq(entry: &[u8], expected: &str) -> bool {
@@ -439,6 +478,29 @@ mod tests {
         }
         finish_crcs(&mut disk);
         disk
+    }
+
+    #[test]
+    fn legacy_boot_only_admits_a_distinct_writable_data_partition() {
+        let mut disk = fixture_disk();
+        disk.0[2].fill(0);
+        add_partition(&mut disk, 0, SYSTEM_TYPE_GUID, [1; 16], 34, 40, "System");
+        add_partition(&mut disk, 1, DATA_TYPE_GUID, [2; 16], 41, 80, "Data");
+        finish_crcs(&mut disk);
+        assert_eq!(
+            legacy_data_partition(&mut disk, 128),
+            Ok(PartitionRange { partition_index: 1, first_lba: 41, last_lba: 80 }),
+        );
+        assert_eq!(legacy_data_partition(&mut layout_disk(), 256), Err(MatchError::InvalidGpt));
+
+        disk.0[2][128 + 55] = 0x10; // GPT read-only attribute, bit 60.
+        finish_crcs(&mut disk);
+        assert_eq!(legacy_data_partition(&mut disk, 128), Err(MatchError::InvalidGpt));
+
+        disk.0[2][128 + 55] = 0;
+        add_partition(&mut disk, 1, DATA_TYPE_GUID, [2; 16], 40, 80, "Data");
+        finish_crcs(&mut disk);
+        assert_eq!(legacy_data_partition(&mut disk, 128), Err(MatchError::InvalidGpt));
     }
 
     #[test]

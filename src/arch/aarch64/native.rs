@@ -18,6 +18,11 @@ use mnu_abi::hypervisor::{
     DomainBootInfo, DOMAIN_BOOT_MAGIC, DOMAIN_BOOT_VERSION, HYPERVISOR_BACKEND_ARM_EL2,
 };
 
+#[cfg(arm64_boot_disk)]
+mod boot_disk;
+#[cfg(arm64_boot_disk)]
+mod boot_rtc;
+
 core::arch::global_asm!(
     include_str!("entry.S"),
     native_image = const 1,
@@ -41,11 +46,18 @@ unsafe extern "C" {
 #[global_allocator]
 static KERNEL_ALLOCATOR: HardenedKernelHeap = HardenedKernelHeap::empty();
 static mut BOOT_INFO: BootInfo = BootInfo::empty();
-static mut BOOT_MEMORY: MemoryRegion = MemoryRegion {
-    start: 0,
-    len: 0,
-    region_type: MemoryType::Usable,
-};
+static mut BOOT_MEMORY: [MemoryRegion; 2] = [
+    MemoryRegion {
+        start: 0,
+        len: 0,
+        region_type: MemoryType::KernelImage,
+    },
+    MemoryRegion {
+        start: 0,
+        len: 0,
+        region_type: MemoryType::Usable,
+    },
+];
 
 #[cfg(arm64_boot_module)]
 static BOOT_MODULE: &[u8] = include_bytes!(env!("MOCHIOS_ARM64_BOOT_MODULE"));
@@ -90,17 +102,25 @@ extern "C" fn __mnu_arm64_native_entry(base: u64, size: u64, dtb_len: usize) -> 
     if !BOOT_MODULE.is_empty() && mnu_abi::boot_module::decode(BOOT_MODULE).is_err() {
         mnu::arch::halt();
     }
+    #[cfg(arm64_boot_disk)]
+    if !boot_disk::install() {
+        mnu::arch::halt();
+    }
+    #[cfg(arm64_boot_disk)]
+    boot_rtc::prepare(&tree, &map);
 
     let hardware_id = mnu::percpu::hardware_id();
     // SAFETY: Entry admitted a single CPU, sized this span against its PA
     // width, and retained it in TTBR1. Only the part beyond the linked kernel
     // can enter the allocator. The firmware Image protocol owns that span.
     let info = unsafe {
-        BOOT_MEMORY.start = base + used;
-        BOOT_MEMORY.len = size - used;
+        BOOT_MEMORY[0].start = base;
+        BOOT_MEMORY[0].len = used;
+        BOOT_MEMORY[1].start = base + used;
+        BOOT_MEMORY[1].len = size - used;
         BOOT_INFO.physical_memory_offset = KERNEL_MAP_OFFSET - base;
         BOOT_INFO.memory_map_addr = core::ptr::addr_of!(BOOT_MEMORY) as u64;
-        BOOT_INFO.memory_map_len = 1;
+        BOOT_INFO.memory_map_len = 2;
         BOOT_INFO.kernel_heap_addr = core::ptr::addr_of!(KERNEL_ALLOCATOR) as u64;
         BOOT_INFO.bsp_hardware_id = hardware_id;
         BOOT_INFO.cpu_hardware_ids[0] = hardware_id;
