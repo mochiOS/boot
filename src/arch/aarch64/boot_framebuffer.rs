@@ -76,7 +76,8 @@ impl Node<'_> {
             || height == 0
             || pitch & 3 != 0
             || pitch < width.checked_mul(4)?
-            || mapped_bytes > capacity
+            || bytes > capacity
+            || base.checked_add(capacity).is_none()
         {
             return None;
         }
@@ -159,6 +160,8 @@ pub(super) fn admit(
     }
     let fb = framebuffer?;
     let end = fb.base.checked_add(fb.mapped_bytes)?;
+    // The scanout extent need not fill the final page, but the reservation
+    // must cover every byte exposed by the page-aligned mapping.
     let mut reservations = map
         .reservations()
         .iter()
