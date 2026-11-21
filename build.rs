@@ -92,5 +92,7 @@ fn embed_disk(path: std::ffi::OsString) {
         .expect("write ARM64 boot disk input");
     println!("cargo:rerun-if-changed={filename}");
     println!("cargo:rustc-cfg=arm64_boot_disk");
-    println!("cargo:rustc-link-arg-bin=mochios-native=--defsym=NATIVE_FREE_RAM=0xc000000");
+    // Keep enough allocator RAM for the full userspace and the transient
+    // verified ELF copies needed during desktop startup.
+    println!("cargo:rustc-link-arg-bin=mochios-native=--defsym=NATIVE_FREE_RAM=0x14000000");
 }
