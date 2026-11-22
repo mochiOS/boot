@@ -53,18 +53,10 @@ fn set<'a>(field: &mut Option<&'a [u8]>, value: &'a [u8]) -> Option<()> {
 }
 
 impl Node<'_> {
-    fn geometry(&self, address_cells: &[u8], size_cells: &[u8]) -> Option<Framebuffer> {
-        if self.format != Some(b"x8r8g8b8\0") || self.memory.is_some() {
+    fn geometry(&self, base: u64, capacity: u64) -> Option<Framebuffer> {
+        if self.format != Some(b"x8r8g8b8\0") {
             return None;
         }
-        let address_bytes = usize::try_from(cell(address_cells)?).ok()?.checked_mul(4)?;
-        let size_bytes = usize::try_from(cell(size_cells)?).ok()?.checked_mul(4)?;
-        let reg = self.reg?;
-        if address_bytes.checked_add(size_bytes)? != reg.len() {
-            return None;
-        }
-        let base = number(&reg[..address_bytes])?;
-        let capacity = number(&reg[address_bytes..])?;
         let width = u64::from(cell(self.width?)?);
         let height = u64::from(cell(self.height?)?);
         let pitch = u64::from(cell(self.stride?)?);
@@ -90,6 +82,88 @@ impl Node<'_> {
             mapped_bytes,
         })
     }
+}
+
+fn reg_range(reg: &[u8], address_cells: &[u8], size_cells: &[u8]) -> Option<(u64, u64)> {
+    let address_bytes = usize::try_from(cell(address_cells)?).ok()?.checked_mul(4)?;
+    let size_bytes = usize::try_from(cell(size_cells)?).ok()?.checked_mul(4)?;
+    if address_bytes.checked_add(size_bytes)? != reg.len() {
+        return None;
+    }
+    Some((
+        number(&reg[..address_bytes])?,
+        number(&reg[address_bytes..])?,
+    ))
+}
+
+fn reserved_range(tree: &Fdt<'_>, reference: &[u8]) -> Option<(u64, u64)> {
+    if matches!(cell(reference)?, 0 | u32::MAX) {
+        return None;
+    }
+    let mut reserved = false;
+    let mut address_cells = None;
+    let mut size_cells = None;
+    let mut phandle = None;
+    let mut legacy = None;
+    let mut reg = None;
+    let mut status = None;
+    let mut no_map = None;
+    let mut range = None;
+    for token in tree.tokens() {
+        match token.ok()? {
+            Token::BeginNode { depth: 1, name } => reserved = name == "reserved-memory",
+            Token::EndNode { depth: 1 } => reserved = false,
+            Token::BeginNode { depth: 2, .. } if reserved => {
+                (phandle, legacy, reg, status, no_map) = (None, None, None, None, None);
+            }
+            Token::Property {
+                depth: 1,
+                name: "#address-cells",
+                value,
+            } if reserved => {
+                set(&mut address_cells, value)?;
+            }
+            Token::Property {
+                depth: 1,
+                name: "#size-cells",
+                value,
+            } if reserved => {
+                set(&mut size_cells, value)?;
+            }
+            Token::Property {
+                depth: 2,
+                name,
+                value,
+            } if reserved => match name {
+                "phandle" => set(&mut phandle, value)?,
+                "linux,phandle" => set(&mut legacy, value)?,
+                "reg" => set(&mut reg, value)?,
+                "status" => set(&mut status, value)?,
+                "no-map" => set(&mut no_map, value)?,
+                _ => {}
+            },
+            Token::Property {
+                name: "phandle" | "linux,phandle",
+                value,
+                ..
+            } if value == reference => return None,
+            Token::EndNode { depth: 2 } if reserved => {
+                if phandle == Some(reference) || legacy == Some(reference) {
+                    if phandle.or(legacy) != Some(reference)
+                        || legacy.is_some_and(|value| value != reference)
+                        || range.is_some()
+                        || !matches!(status, None | Some(b"okay\0" | b"ok\0"))
+                        || no_map != Some(b"")
+                    {
+                        return None;
+                    }
+                    range = Some(reg_range(reg?, address_cells?, size_cells?)?);
+                }
+            }
+            _ => {}
+        }
+    }
+    range
 }
 
 pub(super) fn admit(
@@ -151,14 +225,28 @@ pub(super) fn admit(
                     if framebuffer.is_some() || ranges != Some(&[]) {
                         return None;
                     }
-                    framebuffer = Some(node.geometry(address_cells?, size_cells?)?);
+                    let (base, capacity) = if let Some(reference) = node.memory {
+                        let range = reserved_range(tree, reference)?;
+                        if let Some(reg) = node.reg {
+                            if reg_range(reg, address_cells?, size_cells?)? != range {
+                                return None;
+                            }
+                        }
+                        range
+                    } else {
+                        reg_range(node.reg?, address_cells?, size_cells?)?
+                    };
+                    framebuffer = Some((
+                        node.geometry(base, capacity)?,
+                        node.memory.map(|_| capacity),
+                    ));
                 }
             }
             Token::EndNode { depth: 1 } => chosen = false,
             _ => {}
         }
     }
-    let fb = framebuffer?;
+    let (fb, referenced_capacity) = framebuffer?;
     let end = fb.base.checked_add(fb.mapped_bytes)?;
     // The scanout extent need not fill the final page, but the reservation
     // must cover every byte exposed by the page-aligned mapping.
@@ -175,6 +263,8 @@ pub(super) fn admit(
             .any(|r| r.start() <= fb.base && end <= r.end())
         || reservation.region.start() != fb.base
         || reservation.region.end() < end
+        || referenced_capacity
+            .is_some_and(|capacity| !reservation.no_map || reservation.region.size() != capacity)
         || reservation.reusable
         || reservations.next().is_some()
     {
