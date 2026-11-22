@@ -25,8 +25,13 @@ fn main() {
             println!("cargo:rustc-cfg=arm64_boot_module");
         }
         println!("cargo:rerun-if-env-changed=MOCHIOS_ARM64_BOOT_DISK");
+        let external = std::env::var_os("CARGO_FEATURE_ARM64_EXTERNAL_BOOT_DISK").is_some();
         if let Some(path) = std::env::var_os("MOCHIOS_ARM64_BOOT_DISK") {
+            assert!(!external, "select only one ARM64 development boot disk");
             embed_disk(path);
+        } else if external {
+            // Reserve room for a 256 MiB disk and at least 320 MiB of allocator RAM.
+            println!("cargo:rustc-link-arg-bin=mochios-native=--defsym=NATIVE_FREE_RAM=0x24000000");
         }
         println!("cargo:rustc-link-arg-bin=mochios-native=-zmax-page-size=4096");
         println!("cargo:rustc-link-arg-bin=mochios-native=--defsym=NATIVE_IMAGE=1");

@@ -38,6 +38,7 @@ domain_entry:
     tst x0, #7
     b.ne .Lhalt
     mov x21, x0
+    mov x27, x0
 .else
     mov x24, #0
     tst x0, #7
@@ -266,6 +267,7 @@ domain_entry:
     mov sp, x2
 .if {native_image}
     mov x2, x25
+    mov x3, x27
 .endif
     br x16
 .Lhalt:

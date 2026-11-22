@@ -1,4 +1,4 @@
-//! A development boot medium retained in the native Image. Its Data writes
+//! A development boot medium retained in RAM. Its Data writes
 //! last for this boot, so the source image is safe to use in repeated trials.
 
 use core::ops::Range;
@@ -12,11 +12,13 @@ use mochios_mdriver_protocol::control::{
     MDRIVER_DEVICE_FEATURE_PARTITIONED, MDRIVER_DEVICE_FEATURE_SOFTWARE,
 };
 
+#[cfg(arm64_boot_disk)]
 core::arch::global_asm!(
     include_str!(concat!(env!("OUT_DIR"), "/arm64-boot-disk.S")),
     options(raw)
 );
 
+#[cfg(arm64_boot_disk)]
 unsafe extern "C" {
     static mut __arm64_boot_disk_start: u8;
     static __arm64_boot_disk_end: u8;
@@ -45,17 +47,20 @@ impl SectorReader for ImageReader<'_> {
     }
 }
 
-pub(super) fn install() -> bool {
+#[cfg(arm64_boot_disk)]
+pub(super) fn install_embedded() -> bool {
     let base = core::ptr::addr_of_mut!(__arm64_boot_disk_start) as usize;
     let end = core::ptr::addr_of!(__arm64_boot_disk_end) as usize;
-    let Some(length) = end
-        .checked_sub(base)
-        .filter(|size| *size % SECTOR_BYTES == 0)
-    else {
+    // SAFETY: The linker owns this initialized region for the lifetime of the kernel.
+    unsafe { install(base, end - base) }
+}
+
+/// The range must be uniquely owned, writable RAM retained for this boot.
+pub(super) unsafe fn install(base: usize, length: usize) -> bool {
+    if length == 0 || length % SECTOR_BYTES != 0 || length > isize::MAX as usize {
         return false;
-    };
-    // SAFETY: The linker pinned this initialized byte range, and the disk
-    // callbacks have not been published. Parsing only borrows it temporarily.
+    }
+    // SAFETY: The caller owns the range and callbacks are still unpublished.
     let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, length) };
     let Ok(data) = legacy_data_partition(&mut ImageReader(bytes), (length / SECTOR_BYTES) as u64)
     else {
