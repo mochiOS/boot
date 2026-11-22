@@ -87,8 +87,8 @@ domain_entry:
     lsr x1, x1, x2
     cbnz x1, .Lhalt
 
-    // x0 from firmware is a physical pointer to an aligned DTB. Bound the
-    // header and the full DTB before clearing or copying the Image's BSS.
+    // x0 points to the firmware DTB. Preserve it while clearing the linked
+    // Image's BSS. A DTB in spare Image RAM is copied before allocator setup.
     adds x1, x21, #7
     b.cs .Lhalt
     lsr x1, x1, x2
@@ -110,7 +110,8 @@ domain_entry:
     cbnz x3, .Lhalt
     cmp x1, x24
     b.ls .Lfdt_disjoint
-    add x1, x24, x19
+    ldr x1, =__kernel_physical_end
+    add x1, x24, x1
     cmp x21, x1
     b.lo .Lhalt
 .Lfdt_disjoint:
