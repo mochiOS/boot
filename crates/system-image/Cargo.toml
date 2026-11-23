@@ -10,7 +10,9 @@ std = ["ed25519-dalek/std", "sha2/std", "dep:base64"]
 [dependencies]
 base64 = { version = "0.22", optional = true }
 ed25519-dalek = { version = "2", default-features = false }
-sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+# CPU selection belongs to the executable: UEFI explicitly forces software,
+# while native services retain runtime hardware detection and fallback.
+sha2 = { version = "0.10", default-features = false }
 
 [[bin]]
 name = "system-image-sign"
